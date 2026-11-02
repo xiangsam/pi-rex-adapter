@@ -243,6 +243,30 @@ The development environment could not access the Rex socket, so real Rex layout,
 10. Close all tasks in Jobs 2 and Jobs 3: verify that closed pages do not force the next new page to be Jobs 4.
 11. Change UI language and pane limit, then reload: verify the main overview and future launches while preserving existing layouts.
 
+## Publishing releases
+
+Publishing a GitHub Release triggers [the npm workflow](.github/workflows/publish.yml). It checks that the release tag matches `package.json`, runs syntax checks and the test suite through `prepublishOnly`, then publishes with provenance. Stable releases use npm's `latest` tag; GitHub pre-releases with a version such as `0.2.0-beta.1` use `next`.
+
+One-time maintainer setup: in the npm package's **Settings → Trusted Publisher**, select **GitHub Actions** and enter:
+
+| Field | Value |
+| --- | --- |
+| Organization or user | `xiangsam` |
+| Repository | `pi-rex-adapter` |
+| Workflow filename | `publish.yml` |
+| Environment name | Leave empty |
+| Allowed actions | Enable direct publishing with `npm publish` |
+
+This uses [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/); no `NPM_TOKEN` secret is needed. The npm-side configuration must be saved before the first automated release.
+
+For each release:
+
+1. Update `package.json` to a new, unpublished version and commit it to GitHub along with the intended changes.
+2. Create a GitHub Release with the matching tag, e.g. `v0.1.1`, targeting that commit. For a version with a prerelease suffix, also select **Set as a pre-release**.
+3. Click **Publish release**, then check **Actions → Publish to npm**. A draft release or a tag push alone does not publish anything.
+
+The workflow publishes the tagged commit, so that commit must contain the workflow and the updated version. npm versions cannot be overwritten: `0.1.0` is already published. README changes reach npm with the next package version. If a run fails before publication, fix the cause and rerun it; if the version is already on npm, use a new version for further changes.
+
 ## Acknowledgments
 
 Inspired by [pi-herdr-agents](https://github.com/giuseppecrj/pi-herdr-agents) for independent agents, non-blocking delegation, and result delivery, and [pi-background-tasks](https://github.com/SakikoTogawa233/pi-background-tasks) for persistent task records and completion notifications. Rex supplies the workspace, layout, and process hosts. This is an independent implementation, with no source copied from those projects; it does not reproduce their entire feature sets.

@@ -1,0 +1,60 @@
+name: Publish to npm
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'xiangsam/pi-rex-adapter'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out the release commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Ensure npm supports trusted publishing
+        run: npm install --global npm@11
+
+      - name: Validate release version
+        id: release
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          const { release } = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+          const { name, version } = JSON.parse(readFileSync('package.json', 'utf8'));
+          if (name !== 'pi-rex-adapter' || release.tag_name !== `v${version}`) {
+            throw new Error(`Expected pi-rex-adapter release tag v${version}; got ${release.tag_name}`);
+          }
+          const prerelease = version.split('+')[0].includes('-');
+          if (release.prerelease !== prerelease) {
+            throw new Error('GitHub pre-release setting must match the package version suffix.');
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `dist_tag=${prerelease ? 'next' : 'latest'}\n`);
+          NODE
+
+      # prepublishOnly runs syntax checks and the test suite before uploading.
+      # This package has no dependencies, so no install or build step is needed.
+      - name: Check, test, and publish with OIDC
+        run: npm publish --access public --provenance --tag "$DIST_TAG"
+        env:
+          DIST_TAG: ${{ steps.release.outputs.dist_tag }}

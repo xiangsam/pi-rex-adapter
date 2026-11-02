@@ -141,6 +141,30 @@ Shell block 在结果确认送达后自动清理；子 agent 由主 agent 通过
 
 子进程使用 Rex 环境和父进程的 PATH，不复制主 Pi 的全部环境变量或临时凭证；模型认证应能由子 Pi 的正常配置加载。命令、子 agent 与项目扩展均以当前用户权限运行。
 
+## 发布版本
+
+发布 GitHub Release 后，[npm 工作流](.github/workflows/publish.yml)会校验 tag 与 `package.json` 版本一致，通过 `prepublishOnly` 执行语法检查和测试，再发布带来源证明的 npm 包。正式版更新 `latest`；例如 `0.2.0-beta.1` 的 GitHub 预发布版本更新 `next`。
+
+维护者只需配置一次：在 npm 包的 **Settings → Trusted Publisher** 选择 **GitHub Actions**，填写：
+
+| 配置项 | 值 |
+| --- | --- |
+| Organization or user | `xiangsam` |
+| Repository | `pi-rex-adapter` |
+| Workflow filename | `publish.yml` |
+| Environment name | 留空 |
+| Allowed actions | 允许通过 `npm publish` 直接发布 |
+
+使用 [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers/)，无需添加 `NPM_TOKEN` secret。首次自动发布前，需要先在 npm 保存上述配置。
+
+之后每次发版：
+
+1. 将 `package.json` 改为尚未发布的新版本，与本次改动一起提交到 GitHub。
+2. 创建 GitHub Release，使用对应 tag，例如 `v0.1.1`，指向该提交。如果版本带预发布后缀，同时勾选 **Set as a pre-release**。
+3. 点击 **Publish release**，在 **Actions → Publish to npm** 查看结果。只保存草稿或推送 tag 不会发布 npm。
+
+工作流发布 tag 指向的提交，该提交必须包含工作流和更新后的版本号。npm 不允许覆盖版本，`0.1.0` 已经发布；README 改动会随下一个版本更新到 npm。若在上传前失败，修复原因后可重跑；若该版本已经发布，后续改动需使用新版本。
+
 ## 验证
 
 ```sh
