@@ -1,0 +1,43 @@
+{
+  "name": "pi-rex-adapter",
+  "version": "0.1.0",
+  "description": "Pi agents and independent side conversations in Rex blocks",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "rex",
+    "pi",
+    "agents"
+  ],
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.mjs"
+    ]
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "check": "node --check src/index.mjs && node --check src/core.mjs && node --check src/runner.mjs && node --check src/layout.mjs && node --check src/child.mjs && node --check src/overview.mjs && node --check src/dialog.mjs && node --check src/config.mjs && node --check src/i18n.mjs",
+    "prepublishOnly": "npm run check && npm test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xiangsam/pi-rex-adapter.git"
+  },
+  "homepage": "https://github.com/xiangsam/pi-rex-adapter#readme",
+  "bugs": {
+    "url": "https://github.com/xiangsam/pi-rex-adapter/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}
