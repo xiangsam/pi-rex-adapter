@@ -1,29 +1,69 @@
 # pi-rex-adapter
 
-在 Rex 中运行 Pi 子任务、右侧 side conversation 和后台 shell 任务的 Pi 扩展。目标环境是 **Pi 1.4+、Node 22.19+**，Rex CLI 需要支持 `window new/split --json --shell=none --focus=false` 与 `block inspect --json`。
+**English** | [简体中文](https://github.com/xiangsam/pi-rex-adapter/blob/main/README.zh-CN.md)
 
-## 安装
+**Give your Pi tasks room to run.**
 
-在 Rex 终端中执行：
+Send a code review to another Pi agent. Explore a side question beside your main conversation. Let a long build finish in the background. pi-rex-adapter gives each task a place in Rex—and brings the results back when they are ready.
+
+- **Full Pi subagents.** Delegate work to interactive Pi sessions in dedicated tabs. Get results automatically, then step into a session whenever you want to continue the conversation.
+- **A conversation on the side.** `/btw` opens an independent Pi beside your main chat. Only the conclusions you choose to return enter the main conversation.
+- **Background jobs that report back.** `/bg` runs long shell commands, delivers their exit code and output, and closes the pane after delivery.
+- **A compact view of active work.** One line per task. Finished tasks leave the overview; history, logs, and controls stay available in a single overlay.
+
+Built to stay out of the way: native Pi tools remain available, user-adjusted layouts are respected, and monitoring stops when no tasks need it. Configuration is just two settings: UI language and panes per tab.
+
+## Installation
+
+Requires **Pi 1.4+**, **Node.js 22.19+**, and Rex with support for `window new/split --json --shell=none --focus=false` and `block inspect --json`.
+
+Run inside a Rex terminal:
+
+```sh
+pi install npm:pi-rex-adapter
+# Run /reload in an existing Pi session, or restart Pi.
+```
+
+You can also install from GitHub:
 
 ```sh
 pi install git:github.com/xiangsam/pi-rex-adapter
-# 在已运行的 Pi 中执行 /reload，或重新启动 pi
 ```
 
-也可以只试用一次：
+Or try it for one session:
 
 ```sh
 pi -e git:github.com/xiangsam/pi-rex-adapter
 ```
 
-npm 发布后也可通过 `pi install npm:pi-rex-adapter` 安装。
+The parent Pi must run inside Rex. The adapter uses `REX_SESSION` and `REX_BLOCK` to target the parent block, regardless of which pane currently has focus. If `rex` is not on `PATH`, it checks the standard macOS Rex and Rex Beta application locations; `PI_REX_BIN` can specify the executable. Child sessions use the current Pi entry point unless `PI_REX_PI_BIN` is set.
 
-父进程必须在 Rex 中运行，依赖 `REX_SESSION` 和 `REX_BLOCK` 定位，始终使用父 block 而不是界面当前焦点。CLI 不在 PATH 时会探测 macOS 的 Rex/Rex Beta 应用；也可设置 `PI_REX_BIN`。子进程默认使用当前 Pi 的入口，`PI_REX_PI_BIN` 可覆盖。运行环境为同一台机器、同一文件系统；不支持远程 Rex host。
+Parent and child processes must share the same machine and filesystem. Remote Rex hosts are not supported.
 
-## 配置
+## Quick start
 
-只提供两个设置，均可省略：
+```text
+/btw What would we gain by making this module event-driven?
+/rex-agent Review the authentication module. Report risks and relevant files without making changes.
+/bg npm test
+/rex-tasks
+```
+
+| Command | What it does |
+| --- | --- |
+| `/btw <question>` | Opens or reuses a side conversation to the right of the main Pi |
+| `/btw` | Focuses the existing side conversation |
+| `/rex-agent <task>` | Starts an interactive Pi subagent in an Agents tab |
+| `/bg <command>` | Starts a background shell job in a Jobs tab |
+| `/rex-tasks` | Opens the task manager overlay |
+
+The main agent can also launch and manage tasks through structured tools. Completion arrives automatically; it does not need to poll for results.
+
+**Closing policy:** shell jobs close after their results are delivered; the main agent closes completed subagents after reviewing them; BTW conversations stay open.
+
+## Configuration
+
+Both settings are optional:
 
 ```json
 {
@@ -32,103 +72,154 @@ npm 发布后也可通过 `pi install npm:pi-rex-adapter` 安装。
 }
 ```
 
-- 全局：`~/.pi/agent/rex.json`。设置了 `PI_CODING_AGENT_DIR` 时，使用该目录下的 `rex.json`。
-- 项目：当前工作目录的 `.pi/rex.json`，按字段覆盖全局配置。
+- **Global:** `~/.pi/agent/rex.json`, or `rex.json` inside `PI_CODING_AGENT_DIR` when that variable is set.
+- **Project:** `.pi/rex.json` in the current working directory. Project fields override global fields.
 
-| 设置 | 默认 | 含义 |
+| Setting | Default | Behavior |
 | --- | --- | --- |
-| `language` | `"en"` | 插件界面语言，支持 `"en"` / `"zh"`。覆盖**主 agent 看板**的标题、运行状态、数量提示，以及浮层、操作提示和子会话提示。例如默认显示 `Running`，中文显示“运行中”。 |
-| `panesPerTab` | `2` | 每个 Agents / Jobs tab 容纳的本扩展 pane 上限，取正整数。`1` 表示每任务单独开 tab，`3` 表示第三个任务仍在同一 tab，第四个进入下一页。 |
+| `language` | `"en"` | `"en"` or `"zh"`. Covers the **main agent's overview**, including titles, task states and counts, plus overlays, action feedback and child-session notices. |
+| `panesPerTab` | `2` | A positive integer limiting adapter-managed panes in each Agents or Jobs tab. Set `1` for a separate tab per task, or `3` to keep the first three tasks together and open a new page for the fourth. |
 
-例如只想切换中文，在项目的 `.pi/rex.json` 中写 `{"language":"zh"}` 即可，pane 上限继续沿用全局值或默认值。
+For example, `{"language":"zh"}` in the project file changes only the UI language. The pane limit still comes from the global configuration or its default.
 
-配置在启动、切换会话或 `/reload` 时读取，不创建默认文件，也不额外监听配置变化。已有子 Pi 在自己的会话中 `/reload` 后更新语言；通过 `cwd` 指定另一个 checkout 的子任务仍读取父项目的配置。配置无效会提示文件与原因，无效字段保留上一级有效值或默认值，其余有效字段照常应用。
+Settings are read at startup, session switches, and `/reload`. No default file is created and no configuration watcher is added. Reload an existing child Pi separately to update its UI language. Children launched into another checkout through `cwd` still read their parent project's configuration. Invalid settings report their source and fall back to inherited or default values; other valid fields still apply.
 
-语言设置不翻译用户任务、agent 回答、日志、底层错误或结构化状态字段，也不改变模型的回答语言。工具名、slash 命令及其描述保持英文。pane 上限只影响后续创建，不重排、移动或关闭已有 pane；始终左右分屏，每次对目标 pane 做 50% 分割，不自动均分整个 tab。BTW 仍在主 tab 右侧复用一个 pane，不受此上限控制。用户手动添加的 pane 仍不计入上限。
+Language settings leave task text, agent answers, logs, underlying errors, and structured status values intact. They do not set the model's response language. Tool names, slash commands, and their descriptions remain in English.
 
-## 使用
+The pane limit affects future launches only. Existing panes are not moved, resized, or closed. Splits are always horizontal: each new pane takes the right half of its target pane. The adapter does not rebalance the entire tab. BTW keeps its own reusable pane beside the parent, outside this limit. Manually added panes do not count toward it.
 
-```text
-/btw 这个模块如果改成事件驱动，有什么取舍？
-/bg npm test
-/rex-agent 检查认证模块，报告风险与相关文件，不修改代码
-/rex-tasks
-```
+## Side conversations
 
-`/btw <问题>` 首次在父 block **右侧占 50%** 打开交互式 Pi，默认保留主线焦点；点击侧栏、单独执行 `/btw`，或在 `/rex-tasks` 中选择“聚焦到任务”进入。它有独立 session，默认继承当前分支的文本快照（最近 48,000 字符，包含摘要，不含图片、thinking 和工具输出），继承模型和 thinking level。它不是 Pi session 的完整 clone。
+`/btw <question>` opens a full interactive Pi in the **right half of the parent block**, keeping focus on the main conversation by default. Click the pane, run `/btw` without a question, or choose **Focus task** in `/rex-tasks` to enter it.
 
-同一父 Pi 再次执行 `/btw <问题>` 会复用当前侧聊，保留原有历史，通过文件 inbox 将问题送入侧聊的 Pi 输入接口；忙时等它空闲后合并接收，不向终端模拟按键。只有问题实际写入侧聊的 Pi 会话后才确认接收；调用输入接口本身不算成功。Pi 的接口不返回异步确认，因此未确认的问题不会自动反复重发，避免慢认证或输入扩展造成重复提问。10 秒后仍未确认会在侧聊状态栏提示，问题继续保留；处理模型/认证/输入错误后，在侧聊执行 `/reload` 重试。单独 `/btw` 聚焦现有侧聊。已有侧聊保持创建时的上下文快照，后续问题不自动重拷贝主线历史；需要刷新背景时在问题中补充。关闭侧聊后再次提问会新建独立会话；正常退出但保留的侧聊 block 会先关闭再替换。明确指定不同的 cwd/model 时要求先关闭现有侧聊。
+The conversation has its own Pi session. By default it inherits the parent's model, thinking level, and a text snapshot of the current branch: up to 48,000 recent characters, including summaries but excluding images, thinking, and tool output. This is a text snapshot, not a complete Pi session clone.
 
-侧聊不会自动回传每轮回答。在侧聊中执行：
+Further `/btw <question>` calls reuse the same conversation and history. Questions go through a file inbox into Pi's input API; no terminal keystrokes are simulated. Questions arriving while the child is busy are combined when it becomes idle. The original context snapshot is retained, so include any newer background in the question itself.
+
+An input is acknowledged only after it appears in the child's Pi session. Pi's input API returns no asynchronous confirmation, so an unconfirmed input is retained rather than repeatedly resent while authentication or input handlers may still be running. After 10 seconds, the child status line shows a notice. Fix the model, authentication, or input error, then run `/reload` in the child to retry.
+
+To send a conclusion back, run this **inside the side conversation**:
 
 ```text
 /btw-return
-/btw-return 采用方案 B，只改缓存层，其他部分暂缓
+/btw-return Use option B. Change the cache layer first and leave the rest for later.
 ```
 
-不带参数时回传最后一条 assistant 回答；带参数只回传指定文字。回传后侧聊仍可继续，并可再次回传。默认仅启用 `read,grep,find,ls` 且禁用 MCP，适合讨论；这是工具选择，不是权限沙箱。不会自动合并文件。
+Without arguments, it returns the last assistant answer. With arguments, it returns only that text. The conversation stays open and can return more conclusions later; ordinary answers are not automatically sent to the parent.
 
-`/bg` 将 shell 命令放到Jobs 分组 tab 中的独立 terminal block，stdin 关闭，使用 `/bin/sh -c`，工作目录默认与父 Pi 相同。完整 stdout/stderr 写入 `output.log`，同时在 block 展示；两端均处理背压，写入失败时停止 shell 并尽量保存失败记录；结束时回传退出码、最后 16,000 字符和日志路径。长驻 server 直到退出才产生完成结果。命令结束后进程立即退出；主线会话确认持久化收到结果后（包括非零退出），扩展自动关闭它的 block，保留日志与任务记录。仅排入消息队列不算送达；父 Pi 离线时会等它恢复、接收结果后再清理。它适合启动前就决定放后台的构建、测试和服务；**此版本不接管已经运行的内置 bash，也未实现 Ctrl+B/超时自动转后台**，避免重跑正在执行的命令。
+BTW enables only `read,grep,find,ls` by default and disables MCP. This is a tool selection, not a security sandbox. Files are not automatically merged. To change the existing conversation's `cwd` or model, close it before creating another. A normally exited but retained BTW block is closed and replaced when a new question is submitted.
 
-未指定名称时，任务名使用任务首行的短摘要，避免历史列表只显示时间戳。
+## Interactive subagents
 
-`/rex-agent` 在 Agents 分组 tab 的独立 terminal block 中启动完整交互式 Pi（不使用 `--print`）。每轮任务 settled 后自动回传该轮回答，Pi 会话保持打开；可聚焦该 block 继续输入下一轮，后续回答也分别回传。主 agent 处理完完成结果、确认无需继续交互后调用 `rex_finish` 关闭该 block；工具会检查任务已完成且进程 idle/已退出，不会关闭正在运行的任务或 BTW。这由主 agent 调用执行，不是子进程自行关闭。子进程默认不注册本 adapter 的委派工具。子任务共享工作目录；并行写入请通过工具的 `cwd` 指定事先准备的独立 checkout。此版本不自动管理 worktree、角色包、模型 fallback 或持久 specialist。
+`/rex-agent` starts a **full interactive Pi**, without `--print`, in an Agents tab. Every settled turn returns its answer to the parent. The Pi session remains open, so you can focus it and continue the conversation; later turns produce separate reports.
 
-## 主页面任务概览
+After reviewing a completed result, the main agent calls `rex_finish` when no further interaction is needed. This requires a completed task with an idle or exited process. It will not finish an active task or a BTW conversation. Closing is a main-agent action, not a child that exits itself.
 
-父 Pi 输入框上方只展示仍在运行、启动中或待核实的 Agent / Shell，BTW 不展示。采用低饱和蓝灰色（#7e98ad）的细分隔线与标题、灰色正文；每个任务最多一行，显示类型、名称、状态和可容纳的任务摘要，不展示 UUID、时间或第二行命令。最多显示六项，其余通过面板查看。完成、失败、中断、取消或关闭的任务自动移出概览；全部结束后整个概览消失，历史记录不删除。任务文本中的终端控制字符会被清理，窄窗口自动截断。
+Child sessions do not register this adapter's delegation tools. Tasks share a working directory unless the main agent supplies another `cwd`. For parallel writers, prepare separate checkouts and pass their paths explicitly. The adapter does not create worktrees or manage role packs, model fallbacks, or persistent specialists.
 
-`/rex-tasks` 是唯一的管理入口，使用 Pi 原生居中悬浮框，最大宽度 84 列，窄窗口自动收缩。面板有不透明蓝灰背景、圆角边框、内边距和整行选中高亮，覆盖在终端内容之上，退出后恢复原页面。没有任务时显示 `No tasks yet` 和创建提示（`language: "zh"` 时为“暂无任务”）：
+If no name is supplied, the task's first line becomes a short, readable name.
 
-- 上下键选择任务，Enter 打开，Esc 返回；长列表与详情支持 PageUp/PageDown 滚动。详情/日志返回原任务菜单，菜单返回列表时保留选中任务和滚动位置；操作出错后仍可留在原菜单继续处理。
-- 任务菜单集中提供详情、日志、聚焦、中断、完成并关闭、显式关闭。
-- 菜单第一项切换主页面概览的显示/隐藏，偏好按父 Pi session 保存。
-- 已关闭任务仍能查看结果和日志，BTW 可在历史列表管理。
-- 创建结果不确定、没有 block ID 时不显示必然失败的聚焦/关闭操作。检查 Rex 并确认资源不存在且相关进程已停止后，可使用任务菜单的“核实资源已移除…”修复记录、解除后续创建阻塞。此操作不发送关窗或杀进程命令；连接错误不能当作资源已移除。
-- 任务查询、详情和错误不向主对话追加 JSON 或通知；创建任务成功只在状态栏短暂提示。
+## Background shell jobs
 
-父会话仅保留 `/btw`、`/bg`、`/rex-agent`、`/rex-tasks` 四个 slash 命令；原独立的面板、概览开关、聚焦/中断/关闭、日志命令已合并到任务浮层。子会话保留 `/btw-return`。模型使用的 `rex_tasks`、`bg_logs`、`rex_control` 等结构化工具不受影响。
+`/bg` runs `/bin/sh -c` in a dedicated terminal block in a Jobs tab, using the parent's working directory by default and closed stdin.
 
-首次恢复会话只做一次任务发现；没有待监控任务时，不创建任务目录、不启动 watcher/定时器。首次委派后才启用相关结果文件事件和每 5 秒对账，忽略日志内容变化；已关闭且结果已送达的任务退出监控，历史详情在打开面板时读取。概览内容不变时不重复刷新；不额外轮询 Rex，也不会单独触发模型工作。面板操作重新验证父会话与任务归属。概览的“运行/待命”是子进程最后报告；打开面板或刷新概览不意味着实时验证每个 Rex block。
+Full stdout and stderr are written to `output.log` and displayed in the block. Both destinations apply backpressure; a write failure stops the shell and attempts to record the failure. When the command exits, the parent receives its exit code, the last 16,000 characters of output, and the artifact path. A long-running server reports completion only when it exits.
 
-关闭策略：**Shell 自动回报并收起；subagent 由主 agent 处理结果后收尾；BTW 保留。** 自动清理遇到 Rex 连接失败时保留记录并在 `/rex-tasks` 显示“清理失败”，后续对账重试。自动关窗在独立串行清理队列执行，模型回合边界不等待 Rex CLI 或磁盘扫描。日志和对话记录不会随 block 一起删除。
+The command process exits when it finishes. The adapter closes its block once the parent session has durably received the result, including nonzero exits. Merely queuing a notification does not count as delivery. If the parent is offline, the block is retained until the parent resumes and receives the result. Logs and task records remain available afterward.
 
-## 给 agent 的工具
+Use this for commands you choose to start in the background. **The adapter does not take over an already-running native `bash` command or implement Ctrl+B/timeout-based backgrounding.** It does not rerun an existing command to make it a background task.
 
-| 工具 | 参数与行为 |
+## Task overview and controls
+
+Above the parent's editor, the overview shows only running, starting, or unverified Agent and Shell tasks. Each occupies at most one line, with its type, name, state, and a task excerpt. BTW conversations are omitted. Completed, failed, interrupted, cancelled, and closed tasks disappear from the overview; when none remain, the overview disappears too. History is retained.
+
+The display uses muted slate blue (`#7e98ad`), thin separators, and grey body text. At most six tasks appear; the task manager contains the rest. Terminal control characters are stripped and narrow panes truncate lines.
+
+`/rex-tasks` is the single management entry point. It opens a native Pi overlay, up to 84 columns wide, with an opaque blue-grey background, border, padding, and a highlighted selection. Closing it restores the underlying page.
+
+- Use arrow keys and Enter to select; Esc goes back. Lists, details, and logs support PageUp/PageDown.
+- Task menus contain details, logs, focus, interrupt, finish, and close actions. Returning from details or logs preserves the task menu; returning to the list preserves the selection and scroll position. Errors return to the same menu.
+- The first list entry toggles the main-page overview. This preference is saved per parent Pi session.
+- Closed tasks retain their results and logs. BTW conversations remain manageable here.
+- An uncertain launch without a block ID does not offer unusable focus or close actions. After checking Rex and verifying that the resource is absent and the related process has stopped, use **Confirm resource removed…** to repair the record. This does not send a close or kill command. A connection failure alone is not evidence that a resource is gone.
+- Queries, details, and action errors stay in overlays. Creating a task gives brief status-bar feedback instead of a JSON dump in the main conversation.
+
+Only `/btw`, `/bg`, `/rex-agent`, and `/rex-tasks` are registered in the parent. The child also has `/btw-return`. Separate panel, overview, focus, interrupt, close, and log slash commands are consolidated into the overlay.
+
+The overview reflects the child's last reported activity. Opening it does not inspect every Rex block. Failed automatic shell cleanup is shown in the task manager and retried in the background. Cleanup runs in a separate serial queue; model turn boundaries never wait for Rex CLI calls or disk scans.
+
+## Tools for the main agent
+
+| Tool | Parameters and behavior |
 | --- | --- |
-| `subagent` | `task`，可选 `name,cwd,model,fork`；启动后台 Pi，自动回传 |
-| `btw` | 参数同上；`task` 可省略以聚焦，提供问题时复用右侧会话，手动回传 |
-| `bg_run` | `command`，可选 `name,cwd`；启动后台 shell，自动回传 |
-| `bg_logs` | `id`；按需读取日志最后 16 KB |
-| `bg_kill` | `id`；关闭所属 shell block |
-| `rex_finish` | `id`；主 agent 处理完成结果后收尾，要求任务 completed 且进程 idle/已退出，保留记录 |
-| `rex_tasks` | 查询任务、进程、block 三种状态和实际所在 window；检查失败显示 unverified 与原因 |
-| `rex_control` | `id,action`；`focus`、`interrupt`、`close` |
+| `subagent` | `task`; optional `name,cwd,model,fork`. Starts an interactive Pi with automatic reports. |
+| `btw` | The same optional fields; omit `task` to focus, or supply a question to reuse the right-side conversation. Reports are explicit. |
+| `bg_run` | `command`; optional `name,cwd`. Starts a shell job with automatic completion delivery. |
+| `bg_logs` | `id`. Reads the last 16 KB of output on demand. |
+| `bg_kill` | `id`. Closes an owned shell block. |
+| `rex_finish` | `id`. Closes a completed, idle or exited task after review; retains records. |
+| `rex_tasks` | Returns task, process, and block states and the actual window. Failed inspection reports `unverified` with the reason. |
+| `rex_control` | `id,action`, where action is `focus`, `interrupt`, or `close`. |
 
-在 Rex 中仅启动任务与 `rex_finish` 默认直接暴露给模型，诊断/日志/控制工具使用 Pi 的 deferred 按需发现机制；没有启用 `tool_search` 或 `codemode` 的配置，在有待处理任务时才直接暴露必要控制工具。非 Rex 且没有所属任务的会话不增加默认工具声明或系统提示规则，不修改 Pi 原生工具。
+`fork:false` omits the parent snapshot. `interrupt` sends Escape to Pi and interrupts only its current turn, leaving the interactive session open. Use `bg_kill` or `close` to stop a shell job. Control tools accept only full task UUIDs owned by the current parent session, not arbitrary Rex block IDs.
 
-`fork:false` 不传父上下文。`interrupt` 对 Pi 发送 Escape，仅中断当前 turn；子 agent 与 BTW 均保持交互会话。停止 shell 用 `bg_kill` 或 `close`。控制操作只接受本父 session 登记的完整任务 UUID，不接受任意 Rex block ID。
+Inside Rex, launch tools and `rex_finish` are exposed directly by default. Diagnostic, log, and control tools use Pi's deferred discovery. If neither `tool_search` nor `codemode` is active, necessary controls are exposed directly while tasks need attention. A non-Rex session with no owned tasks gains no default tool declarations or system-prompt rules. Native Pi tools are unchanged.
 
-## 生命周期与恢复
+## Workspace and layout
+
+A **Rex session** groups the workspace. A **window/tab** groups attention. A **pane** is a position in that layout, while a terminal **block** hosts a process. A **Pi session** stores a conversation. Multiple Pi sessions can share a Rex workspace without sharing conversation context or isolating file changes.
+
+With the default `panesPerTab: 2`:
 
 ```text
-父 Pi → 写入任务记录 → Rex block → runner → Pi / shell
-  ↑                                         ↓
-  └── rex_result 批量接收 ← 完成文件 / 主动回传文件
+Current Rex session (selected by the user)
+├─ Main tab: main Pi | BTW
+├─ Agents · <parent Pi ID>: agent 1 | agent 2
+├─ Agents 2 · <parent Pi ID>: agent 3 | agent 4
+└─ Jobs · <parent Pi ID>: build | test
 ```
 
-借鉴 [pi-herdr-agents](https://github.com/giuseppecrj/pi-herdr-agents) 的独立子进程、非阻塞委派、结果回传，以及 [pi-background-tasks](https://github.com/SakikoTogawa233/pi-background-tasks) 的持久任务登记和完成通知；Rex 负责 session/window/block 布局与进程。实现为独立包，未复制上述项目源码，也不是两者全部功能的移植。
+- All splits place the new pane on the right, taking 50% of the target pane. The adapter never switches to vertical stacking based on window size.
+- Agents and Jobs have separate groups, owned by a parent Pi session. Titles include a short parent ID. Different parents do not reuse one another's task panes. The main tab and Rex session are not renamed; Rex sessions are not automatically created.
+- Layout creation and closing are serialized per parent. Group membership is restored from task records after `/reload`.
+- Shell blocks retained for undelivered results still occupy a slot. After delivery and cleanup, the remaining tab can accept another task. Only open records advance page numbers.
+- Empty tabs are not deleted automatically because users may have added content. Reused page numbers can therefore produce the same title as an older empty tab.
+- Blocks moved by the user stay where they are. A moved block is not reused as a split anchor outside its original managed window. Moving it does not change ownership, result delivery, or control permissions. Manually added panes do not count toward the configured limit and are not rearranged.
+- An inspection failure or uncertain creation stops further creation in that group. The adapter does not interpret a failed connection as a missing resource. Verified removal can be recorded through the task manager's recovery action.
 
-父扩展监听结果文件，先存入本地 inbox，不为每条结果单独排一个 `followUp`。主线工作时在 `turn_end`（本次模型响应及工具执行结束）或 `agent_before_settle` 将全部就绪结果合成一条 custom message，并请求一次 continuation；不用等整个任务空闲。主线空闲时用 300ms 合并窗口收集结果，再触发一次新 turn。模型正在输出或工具正在执行时不强行插入消息；尚未完成的任务也不会阻止已有结果送达。用户中止主线后不会因待收结果立即自动重启；下一次用户启动主线时再接收。agent 无需运行状态轮询。有待监控任务时，内部每 5 秒做一次文件对账，以补偿丢失的文件事件。回合边界只消费已经收集的结果，不等待扫描结束。多轮回报记录时间/顺序，恢复后按顺序批量送达；旧版无顺序字段的结果以文件修改时间兼容排序。任务目录位于父 Pi session directory 的 `rex-adapter/<parent-session-id>/<task-id>/`，私有权限保存任务正文、上下文、session、日志和退出记录。
+`rex_tasks` separates `taskState`, `processState`, and `blockState`. An answered agent can be `completed / idle / open`; a finished shell job can be `completed / exited / open`. Task and process states come from the last activity and exit records. Block state comes from the current Rex inspection, or `unverified` if inspection fails. Confirmed closed records always report `closed`, including when a close races with inspection.
 
-`/reload` 或恢复相同父 session 会重新发现完成结果，通过已持久化消息中的 receipts 去重（兼容旧版单 receipt）。切换到另一 session 后不会把旧任务结果投递给新主线；返回原 session 时补发。退出父 Pi 不会主动关闭 Rex block，但父进程离线时不会触发模型，重新打开原 session 后才能补发。工具取消信号传递到排队后的检查、资源操作与 CLI 子进程；创建请求尚未发出时取消不会开新 block。请求已经发出后被取消、超时或返回格式异常，记录标记为 `uncertain`，不自动重试，以免重复执行。
+`resultAvailable` says whether `result.json` exists. A task with only an exit record still exposes its cancellation or exit reason and retained logs; a successful result is not invented. The footer counts only active Agent and Shell tasks.
 
-Shell block 在结果确认送达后自动清理；子 agent 由主 agent 通过 `rex_finish` 收尾，BTW 默认保留。也可通过 `/rex-tasks` 中的任务操作 显式关闭。重复或并发关闭同一任务幂等。关闭前已完成的任务保留原状态；关闭导致的进程退出归为 cancelled，通知仍保留信号/启动失败原因。任务记录与日志不自动删除，长驻任务日志会持续增长。若 runner 被 SIGKILL、Rex 崩溃或主机断电而未写出退出记录，状态可能停留在 running/uncertain，需要检查 block；不将缺失记录误判为成功。通知对普通 reload 可去重，进程崩溃与队列持久化的极小窗口内不保证事务式 exactly-once。Shell 在 POSIX 下使用独立进程组，runner 收到终止信号时转发给该组，2 秒后仍未结束则升级终止；主动脱离该组的进程不在此保证内。
+Existing tabs are not automatically migrated. Older BTW children need `/reload` to support question delivery, or can be closed and recreated. Multiple independent parent processes controlling the same Pi session are not supported; the layout lock covers one Pi process and its reloads.
 
-子进程使用 Rex 环境和父进程的 PATH，不复制主 Pi 的全部环境变量或临时凭证；模型认证应能由子 Pi 的正常配置加载。命令、子 agent 与项目扩展均以当前用户权限运行。
+## Delivery and recovery
 
-## 验证
+```text
+Parent Pi → task record → Rex block → runner → Pi / shell
+    ↑                                             ↓
+    └── batched rex_result ← completion / return files
+```
+
+The parent collects results in a local inbox. While it is working, `turn_end` or `agent_before_settle` combines ready results into one custom message and requests a continuation. It does not wait for the entire task to become idle or queue a separate follow-up per result. While idle, it collects results for 300 ms before waking the agent once.
+
+Messages are not forced into an in-progress model response or tool execution. Pending results do not immediately restart a parent that the user aborted; they can be received on the next user-started run. Multi-turn reports carry ordering information and are delivered in order after recovery. Older reports without that information fall back to file modification time.
+
+Startup makes one recovery discovery. A session with no tasks to monitor creates no task directory, watcher, or timer. Active monitoring uses relevant file events and a five-second reconciliation interval, ignoring log-content changes. Closed tasks whose results have been delivered leave monitoring; history is loaded when requested. Unchanged overview content is not redrawn. Model boundaries consume already-collected results without waiting for scans.
+
+Artifacts are stored under the parent's Pi session directory at `rex-adapter/<parent-session-id>/<task-id>/`, with private permissions. They include task text, snapshots, child sessions, logs, and exit records.
+
+Reloading or reopening the same parent session discovers pending results and deduplicates them against persisted message receipts, including older single-receipt records. Switching sessions does not deliver old task results into a new parent. Returning to the original parent permits delivery. Exiting the parent does not close its blocks; results wait for that parent to resume.
+
+Cancellation is checked after queued layout work and before resource operations, and is passed to CLI subprocesses. Cancelling before a creation request is sent prevents a new block. Once a request has been sent, cancellation, timeout, or an invalid acknowledgment produces an `uncertain` record rather than an automatic retry that could duplicate work.
+
+Repeated or concurrent closes are idempotent. A task completed before closing keeps its outcome; an exit caused by closing an active task is classified as cancelled, with signal or startup errors retained. Records are not automatically deleted, and long-running jobs can keep growing their full logs.
+
+On POSIX, shell jobs have an isolated process group. The runner forwards termination signals to the group and escalates after two seconds if necessary. Processes that deliberately leave that group are outside this guarantee. SIGKILL, a Rex crash, or power loss may prevent exit records from being written, leaving the last state stale. Missing records never imply success. Ordinary reloads deduplicate delivery; crash windows do not provide transactional exactly-once guarantees.
+
+Children use the Rex environment and the parent's `PATH`, without copying the parent's entire environment or temporary credentials. Model authentication should be available through the child's normal Pi configuration. Commands, agents, and project extensions run with the current user's permissions.
+
+## Development and verification
 
 ```sh
 npm test
@@ -136,43 +227,28 @@ npm run check
 npm pack --dry-run
 ```
 
-自动化覆盖 Rex 参数契约、上下文裁剪、交互式 Pi 参数、真实 shell 成功/失败路径、Pi 启动失败、批量通知与 reload 去重、BTW 显式回传、控制所有权、并发/重复 close 与取消退出竞态、失败原因展示、左右分组与溢出、BTW 并发复用和输入去重、手动移动保留、独立任务/进程/block 状态、概览与隐藏恢复、送达后 shell 自动清理、主 agent 安全收尾、关闭竞态和页码回收。另覆盖取消排队/已发出创建、慢清理与主线隔离、冷历史不再读取、异步拒收后的输入恢复、多轮顺序、人工核实恢复、浮层返回位置、慢终端背压、日志写入失败以及 shell 进程组终止。配置测试覆盖默认英文、全局/项目覆盖、错误配置回退、主看板与浮层语言切换、子会话继承父项目配置，以及 pane 上限与 reload 后保留已有布局。已用本机 Pi 1.4.0 的真实扩展 loader 验证注册。
+The regression suite covers CLI arguments, context snapshots, interactive Pi startup, real shell success and failure, bounded result payloads, batching and deduplication, ownership, cancellation, close races, layout overflow and restoration, BTW reuse and input confirmation, task overlays, cleanup after delivery, and manual recovery. It also covers slow-terminal backpressure, log failures, process-group termination, configuration precedence, language switching, and configurable pane limits. Registration has been checked with the Pi 1.4.0 extension loader.
 
-本次开发环境禁止连接 Rex 本地 socket，因此尚未完成真实 Rex 布局/关闭进程的端到端验证。在 Rex 中安装后建议验收：
+The development environment could not access the Rex socket, so real Rex layout, focus, and close behavior still require end-to-end verification. Suggested smoke tests inside Rex:
 
-1. `/bg printf hello`：立即返回任务 ID，稍后主线收到 exit=0 与 hello。
-2. `/bg sleep 5; echo done; exit 7`：执行期间主线可继续工作，随后收到 exit=7。
-3. `/btw 回顾一下我们正在解决什么问题`：右侧出现新 Pi，主线保持焦点；侧聊回答不进入主线，`/btw-return` 后才回传。
-4. 后台任务运行时 `/reload`：结束后只通知一次；在任务浮层关闭任务后不会影响其他资源，模型工具重复关闭同一任务保持幂等。
-5. 同时完成多个后台任务：主线收到一批结果；主线正在工作时在下一回合边界接收，而不是空闲一条、工作一轮。
-6. 默认 `panesPerTab: 2` 时，连续启动三个 `/rex-agent`：前两个在同一个 Agents tab 左右排列，第三个进入 Agents 2；每个都是完整 Pi TUI。
-7. 连续启动三个 `/bg`：同样分为 Jobs 与 Jobs 2；与 Agents 分组相互独立。
-8. 再次 `/btw 新问题`：不增加 pane，原侧聊继续回答；单独 `/btw` 聚焦它。
-9. `/rex-tasks` 区分 completed/idle/open 与 completed/exited/closed；关闭 idle agent 保留其完成结果。
-10. 检查主页面概览：每个活跃 Agent / Shell 一行，不显示 BTW，完成后移出，全部结束后隐藏；`/rex-tasks` 可查看历史结果。Shell 回报后 pane 自动关闭；subagent 待主 agent 调用 `rex_finish`。
-11. 关闭 Jobs 2/3 的全部任务后，下一页不会因历史记录直接跳到 Jobs 4。
+1. `/bg printf hello`: receive `exit=0` and `hello`, then see the pane close after delivery.
+2. `/bg sleep 5; echo done; exit 7`: continue working while the job runs, then receive the nonzero exit.
+3. Open a BTW conversation: verify the right-side split and retained main focus; return a conclusion with `/btw-return`.
+4. Reload the parent while jobs run: receive each result once after completion. Repeat a close and verify that it is harmless.
+5. Finish several jobs together: receive a batch instead of a separate model turn for every result.
+6. With the default pane limit, launch three agents, then three shell jobs: verify separate Agents/Jobs groups and second pages.
+7. Ask another BTW question: verify that the same conversation is reused and bare `/btw` focuses it.
+8. Verify that finishing an idle agent preserves its result and that its task, process, and block states remain distinct.
+9. Check that finished tasks leave the overview but remain in history. Shell panes close after delivery; agents wait for the main agent to finish them.
+10. Close all tasks in Jobs 2 and Jobs 3: verify that closed pages do not force the next new page to be Jobs 4.
+11. Change UI language and pane limit, then reload: verify the main overview and future launches while preserving existing layouts.
 
-## 工作区与布局策略
+## Acknowledgments
 
-Rex session 表达工作的归属，window/tab 表达注意力分组，pane 表达需要同时查看的内容。Pi session 保存对话，两种 session 独立：多个 Pi session 可以在同一个 Rex 工作区中运行，布局不会共享上下文或隔离文件修改。
+Inspired by [pi-herdr-agents](https://github.com/giuseppecrj/pi-herdr-agents) for independent agents, non-blocking delegation, and result delivery, and [pi-background-tasks](https://github.com/SakikoTogawa233/pi-background-tasks) for persistent task records and completion notifications. Rex supplies the workspace, layout, and process hosts. This is an independent implementation, with no source copied from those projects; it does not reproduce their entire feature sets.
 
-```text
-当前 Rex session（由用户选择；下图为默认 panesPerTab: 2）
-├─ 当前主 tab：主 Pi | BTW
-├─ Agents · <父 Pi ID>：agent 1 | agent 2
-├─ Agents 2 · <父 Pi ID>：agent 3 | agent 4
-└─ Jobs · <父 Pi ID>：build | test
-```
+Rex CLI behavior is based on the installed `rex __internal skill` and `rex split --help`. See the [Rex documentation](https://www.superlogical.com/rex/docs) for its workspace concepts.
 
-- **一律左右分屏，每次将目标 pane 按 50% 分割**。每个分组 tab 默认最多安排两个本扩展管理的 pane，可用 `panesPerTab` 修改，满后新建下一页。保留横向排列，不自动根据窗口大小改成上下排列。
-- Agents 和 Jobs 分开，分组归属于父 Pi session，标题带父 ID 前缀。同一 Rex session 内不同父 Pi 不会复用对方的任务 pane。主 tab 不被重命名。
-- 同一个父会话的布局创建与关闭串行执行，避免并发创建重复 BTW 或超出容量。分组依据磁盘任务记录恢复，`/reload` 后仍可复用。
-- 结果送达前保留输出的 shell block 仍占一个位置；送达后自动关闭，或在任务浮层显式关闭后，可以复用剩余 pane 所在的 tab。新页码只参考未关闭记录，已关闭的高页码不会继续抬高序号。空 tab 不主动删除，以免影响用户添加的内容，因此编号复用时旧空 tab 的标题可能与新 tab 相同。
-- 用户移动过的 block 保留原位置，不被搬回；移动不改变父子关系、结果接收方和控制权限。新任务不会以已移出的 block 为分屏锚点。手动添加的非本扩展 pane 不计入上述 pane 上限，也不会自动重排。
-- 布局检查失败或创建结果不确定时停止新建，保留记录，不将连接失败当作资源已消失。通过 Rex UI 手动删除资源后若检查失败，需要核实记录；不自动忘记未知资源；核实不存在且进程已停止后，通过 `/rex-tasks` 的恢复操作显式修复记录。
+## License
 
-模型工具 `rex_tasks` 返回 `taskState`、`processState`、`blockState`：例如 agent 回答后可以是 `completed / idle / open`，后台命令结束后可以是 `completed / exited / open`。前两者来自子进程最后报告和退出记录；`blockState` 来自此次 Rex 检查，无法验证时为 `unverified` 并显示原因；已经确认关闭的记录强制为 `closed`，即使检查期间刚好发生关闭也不会返回旧的 open。进程被强杀但没有退出记录时，最后报告可能过期。`resultAvailable` 标识是否存在 `result.json`；只有退出记录时仍展示退出原因/取消状态，并可在任务浮层选择“查看日志”读取保留日志，不伪造正常结果。底部状态行仅显示活跃的 Agent / Shell 数量，无活跃任务时清空；BTW 和已结束任务仍可在面板中查看。
-
-旧版本已经打开的 Agents/Jobs tab 不自动迁移，新的分组规则作用于新任务。旧 BTW 需要在侧聊中 `/reload` 后才能接收复用问题，或关闭后重建。尚不支持同一父 Pi session 被多个独立主进程同时操控；串行锁覆盖当前 Pi 进程及其 reload。
-
-Rex 命令以已安装 CLI 的 `rex __internal skill`、`rex split --help` 为依据。概念参考：[Rex 文档](https://www.superlogical.com/rex/docs)。
+[MIT](./LICENSE)

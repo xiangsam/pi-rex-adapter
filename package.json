@@ -1,7 +1,7 @@
 {
   "name": "pi-rex-adapter",
   "version": "0.1.0",
-  "description": "Pi agents and independent side conversations in Rex blocks",
+  "description": "Parallel Pi agents, side conversations, and background jobs in Rex — with automatic result delivery and a compact task overview.",
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
@@ -16,6 +16,7 @@
   "files": [
     "src",
     "README.md",
+    "README.zh-CN.md",
     "LICENSE"
   ],
   "pi": {
