@@ -1,6 +1,6 @@
 {
   "name": "pi-rex-adapter",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Parallel Pi agents, side conversations, and background jobs in Rex — with automatic result delivery and a compact task overview.",
   "type": "module",
   "engines": {
