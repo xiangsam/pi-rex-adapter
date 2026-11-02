@@ -43,8 +43,12 @@ const palette = { background: rgb(21, 29, 38), border: rgb(79, 103, 125),
 // or notifications to the transcript. Uses Pi's configured keybindings.
 export function dialogComponent({ tui, theme, keys, done, title, choices, text, description = '', state = {}, language = 'en' }) {
   let selected = Math.max(0, choices?.findIndex(item => item.value === state.value) ?? 0);
-  let offset = state.offset || 0, capacity = 10, lineCount = 0;
+  let offset = state.offset || 0, capacity = 10, lineCount = 0, closed = false;
   const remember = () => { state.value = choices?.[selected]?.value; state.offset = offset; };
+  const finish = value => {
+    if (closed) return;
+    closed = true; remember(); done(value);
+  };
   const paint = (value, color = 'text', selected = false, bold = false) => theme?.style
     ? theme.style(value, { fg: palette[color], bg: selected ? palette.selected : palette.background, bold }) : value;
   const match = (data, action) => keys.matches(data, `tui.select.${action}`);
@@ -83,8 +87,9 @@ export function dialogComponent({ tui, theme, keys, done, title, choices, text, 
         ...(roomy ? [row()] : []), row(fit(hint, contentWidth), 'hint'), edge('╰', '╯')];
     },
     handleInput(data) {
-      if (match(data, 'cancel')) { remember(); return done(undefined); }
-      if (choices && match(data, 'confirm')) { remember(); return done(choices[selected]?.value); }
+      if (closed) return;
+      if (match(data, 'cancel')) return finish(undefined);
+      if (choices && match(data, 'confirm')) return finish(choices[selected]?.value);
       let delta = 0;
       if (match(data, 'up')) delta = -1;
       if (match(data, 'down')) delta = 1;
@@ -94,6 +99,7 @@ export function dialogComponent({ tui, theme, keys, done, title, choices, text, 
       else offset = Math.max(0, Math.min(Math.max(0, lineCount - capacity), offset + delta));
       remember(); tui.requestRender();
     },
+    close() { finish(undefined); },
     invalidate() {},
   };
 }
@@ -104,8 +110,9 @@ export function createDialogs(getLanguage = () => 'en') {
     let dismiss;
     try {
       return await ctx.ui.custom((tui, theme, keys, done) => {
-        dismiss = () => done(undefined); dismissals.add(dismiss);
-        return dialogComponent({ tui, theme, keys, done, language: getLanguage(), ...config });
+        const component = dialogComponent({ tui, theme, keys, done, language: getLanguage(), ...config });
+        dismiss = () => component.close(); dismissals.add(dismiss);
+        return component;
       }, { overlay: true, overlayOptions: { width: 84, maxHeight: '80%', anchor: 'center', margin: 1 } });
     } finally { dismissals.delete(dismiss); }
   };

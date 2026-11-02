@@ -113,7 +113,7 @@ BTW enables only `read,grep,find,ls` by default and disables MCP. This is a tool
 
 `/rex-agent` starts a **full interactive Pi**, without `--print`, in an Agents tab. Every settled turn returns its answer to the parent. The Pi session remains open, so you can focus it and continue the conversation; later turns produce separate reports.
 
-After reviewing a completed result, the main agent calls `rex_finish` when no further interaction is needed. This requires a completed task with an idle or exited process. It will not finish an active task or a BTW conversation. Closing is a main-agent action, not a child that exits itself.
+After reviewing a completed result, the main agent calls `rex_finish` when no further interaction is needed. This requires a completed task with an idle or exited process. It will not finish an active task or a BTW conversation. Failed or interrupted tasks stay available for diagnosis or follow-up; after reviewing them, use `rex_control({id, action: "close"})` to explicitly close them. Closing is a main-agent action, not a child that exits itself.
 
 Child sessions do not register this adapter's delegation tools. Tasks share a working directory unless the main agent supplies another `cwd`. For parallel writers, prepare separate checkouts and pass their paths explicitly. The adapter does not create worktrees or manage role packs, model fallbacks, or persistent specialists.
 
@@ -137,7 +137,7 @@ The display uses muted slate blue (`#7e98ad`), thin separators, and grey body te
 
 `/rex-tasks` is the single management entry point. It opens a native Pi overlay, up to 84 columns wide, with an opaque blue-grey background, border, padding, and a highlighted selection. Closing it restores the underlying page.
 
-- Use arrow keys and Enter to select; Esc goes back. Lists, details, and logs support PageUp/PageDown.
+- Use arrow keys and Enter to select; Esc goes back one level (details/error → task menu → task list → close). Lists, details, and logs support PageUp/PageDown. Repeated `/rex-tasks` invocations do not stack task managers.
 - Task menus contain details, logs, focus, interrupt, finish, and close actions. Returning from details or logs preserves the task menu; returning to the list preserves the selection and scroll position. Errors return to the same menu.
 - The first list entry toggles the main-page overview. This preference is saved per parent Pi session.
 - Closed tasks retain their results and logs. BTW conversations remain manageable here.
@@ -155,10 +155,10 @@ The overview reflects the child's last reported activity. Opening it does not in
 | `subagent` | `task`; optional `name,cwd,model,fork`. Starts an interactive Pi with automatic reports. |
 | `btw` | The same optional fields; omit `task` to focus, or supply a question to reuse the right-side conversation. Reports are explicit. |
 | `bg_run` | `command`; optional `name,cwd`. Starts a shell job with automatic completion delivery. |
-| `bg_logs` | `id`. Reads the last 16 KB of output on demand. |
+| `bg_logs` | `id`. Reads the last 16 KB of shell output. A missing log returns `logAvailable:false` and a note; agent/BTW results are available through `rex_tasks`. |
 | `bg_kill` | `id`. Closes an owned shell block. |
 | `rex_finish` | `id`. Closes a completed, idle or exited task after review; retains records. |
-| `rex_tasks` | Returns task, process, and block states and the actual window. Failed inspection reports `unverified` with the reason. |
+| `rex_tasks` | Optional `id` queries one owned task; omit it to list all. Always returns an array. Includes task, process, and block states and the actual window. Failed inspection reports `unverified` with the reason. |
 | `rex_control` | `id,action`, where action is `focus`, `interrupt`, or `close`. |
 
 `fork:false` omits the parent snapshot. `interrupt` sends Escape to Pi and interrupts only its current turn, leaving the interactive session open. Use `bg_kill` or `close` to stop a shell job. Control tools accept only full task UUIDs owned by the current parent session, not arbitrary Rex block IDs.
@@ -190,6 +190,8 @@ Current Rex session (selected by the user)
 `rex_tasks` separates `taskState`, `processState`, and `blockState`. An answered agent can be `completed / idle / open`; a finished shell job can be `completed / exited / open`. Task and process states come from the last activity and exit records. Block state comes from the current Rex inspection, or `unverified` if inspection fails. Confirmed closed records always report `closed`, including when a close races with inspection.
 
 `resultAvailable` says whether `result.json` exists. A task with only an exit record still exposes its cancellation or exit reason and retained logs; a successful result is not invented. The footer counts only active Agent and Shell tasks.
+
+Control responses use the same derived task state as `rex_tasks`. Successful closes and confirmed resource removal also save that outcome in `run.json`; repeating a close repairs an older closed record's stale status. While a task remains open, `run.json` is a lifecycle manifest, not a live status feed: query `rex_tasks` to combine activity, result, and exit records. Historical records are not rewritten in a background migration.
 
 Existing tabs are not automatically migrated. Older BTW children need `/reload` to support question delivery, or can be closed and recreated. Multiple independent parent processes controlling the same Pi session are not supported; the layout lock covers one Pi process and its reloads.
 

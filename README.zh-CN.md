@@ -113,17 +113,23 @@ pi -e git:github.com/xiangsam/pi-rex-adapter
 | `subagent` | `task`，可选 `name,cwd,model,fork`；启动后台 Pi，自动回传 |
 | `btw` | 参数同上；`task` 可省略以聚焦，提供问题时复用右侧会话，手动回传 |
 | `bg_run` | `command`，可选 `name,cwd`；启动后台 shell，自动回传 |
-| `bg_logs` | `id`；按需读取日志最后 16 KB |
+| `bg_logs` | `id`；读取 shell 日志最后 16 KB；无日志时返回 `logAvailable:false` 与说明，agent/BTW 结果通过 `rex_tasks` 查看 |
 | `bg_kill` | `id`；关闭所属 shell block |
 | `rex_finish` | `id`；主 agent 处理完成结果后收尾，要求任务 completed 且进程 idle/已退出，保留记录 |
-| `rex_tasks` | 查询任务、进程、block 三种状态和实际所在 window；检查失败显示 unverified 与原因 |
+| `rex_tasks` | 可选 `id` 精确查询所属任务，省略则列出全部，始终返回数组；包含任务、进程、block 状态和实际 window，检查失败显示 unverified 与原因 |
 | `rex_control` | `id,action`；`focus`、`interrupt`、`close` |
 
 在 Rex 中仅启动任务与 `rex_finish` 默认直接暴露给模型，诊断/日志/控制工具使用 Pi 的 deferred 按需发现机制；没有启用 `tool_search` 或 `codemode` 的配置，在有待处理任务时才直接暴露必要控制工具。非 Rex 且没有所属任务的会话不增加默认工具声明或系统提示规则，不修改 Pi 原生工具。
 
 `fork:false` 不传父上下文。`interrupt` 对 Pi 发送 Escape，仅中断当前 turn；子 agent 与 BTW 均保持交互会话。停止 shell 用 `bg_kill` 或 `close`。控制操作只接受本父 session 登记的完整任务 UUID，不接受任意 Rex block ID。
 
+失败或中断的任务保留以便诊断、继续交互；检查结果后，如需关闭，显式调用 `rex_control({id, action: "close"})`。`rex_finish` 仍仅用于 completed 且 idle/已退出的任务；拒绝时会说明当前任务和进程状态，以及显式关闭方式。
+
+任务浮层的 Esc 每次返回一层：详情/错误 → 任务菜单 → 任务列表 → 关闭。重复调用 `/rex-tasks` 不会叠加任务管理器。
+
 ## 生命周期与恢复
+
+控制工具返回的任务状态与 `rex_tasks` 使用相同的推导规则。成功关闭或核实资源已移除时，会将该结果保存到 `run.json`；重复关闭也会修正旧的已关闭记录中的过期状态。任务未关闭时，`run.json` 是生命周期记录，并非实时状态源；应通过 `rex_tasks` 合并 activity、result、exit 记录查询。不会新增后台迁移来批量重写历史记录。
 
 ```text
 父 Pi → 写入任务记录 → Rex block → runner → Pi / shell

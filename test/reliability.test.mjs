@@ -242,6 +242,110 @@ test('details and operation errors return to the selected task menu and list pos
   assert.match(screens[6], /› \[Agent\] review/);
 });
 
+test('close reports and persists the derived outcome, including repeat closes of older records', async t => {
+  let closes = 0;
+  const h = await fixture(t, { control: async run => {
+    closes++;
+    await atomicJson(join(run.dir, 'exit.json'), { code: null, error: 'SIGTERM' });
+  } });
+  await h.events.session_start({}, h.ctx);
+  for (const outcome of ['completed', 'failed', 'interrupted']) {
+    const run = await prepareRun(h.root, { kind: 'agent', name: outcome, block: 'block' }, '');
+    await atomicJson(join(run.dir, 'run.json'), { ...run, status: 'running' });
+    await atomicJson(join(run.dir, 'activity.json'), { task: outcome, process: 'idle' });
+    await atomicJson(join(run.dir, 'result.json'), { status: outcome, text: outcome });
+    const closed = await h.call('rex_control', { id: run.id, action: 'close' });
+    assert.equal(closed.details.status, outcome);
+    assert.equal(closed.details.taskState, outcome);
+    assert.equal(closed.details.blockState, 'closed');
+    assert.equal((await readJson(join(run.dir, 'run.json'))).status, outcome);
+    // Older manifests can still have a stale status; a repeat close repairs it.
+    const saved = await readJson(join(run.dir, 'run.json'));
+    await atomicJson(join(run.dir, 'run.json'), { ...saved, status: 'running' });
+    const repeated = await h.call('rex_control', { id: run.id, action: 'close' });
+    const row = (await h.call('rex_tasks', {})).details.find(row => row.id === run.id);
+    assert.equal(repeated.details.status, row.status);
+    assert.equal((await readJson(join(run.dir, 'run.json'))).status, outcome);
+  }
+  assert.equal(closes, 3);
+});
+
+test('missing logs are a normal result; empty logs and real filesystem errors stay distinct', async t => {
+  const h = await fixture(t);
+  await h.events.session_start({}, h.ctx);
+  for (const kind of ['agent', 'btw', 'shell']) {
+    const run = await prepareRun(h.root, { kind, name: kind }, '');
+    const missing = await h.call('bg_logs', { id: run.id });
+    assert.equal(missing.isError, undefined);
+    assert.equal(missing.details.logAvailable, false);
+    assert.equal(missing.details.output, '');
+    assert.match(missing.details.note, /No output log/);
+    assert.doesNotMatch(missing.details.note, /ENOENT/);
+    await writeFile(join(run.dir, 'output.log'), '');
+    assert.deepEqual((await h.call('bg_logs', { id: run.id })).details, { output: '', logAvailable: true });
+    await rm(join(run.dir, 'output.log'));
+    await mkdir(join(run.dir, 'output.log'));
+    assert.equal((await h.call('bg_logs', { id: run.id })).isError, true);
+  }
+});
+
+test('task queries accept an optional owned ID and inspect only that task', async t => {
+  const inspected = [];
+  const h = await fixture(t, { inspect: async run => { inspected.push(run.id); return { window: 'window' }; } });
+  await h.events.session_start({}, h.ctx);
+  const one = await prepareRun(h.root, { kind: 'agent', name: 'one', block: 'one' }, '');
+  await prepareRun(h.root, { kind: 'agent', name: 'two', block: 'two' }, '');
+  assert.equal(h.tools.rex_tasks.parameters.properties.id.type, 'string');
+  assert.deepEqual(h.tools.rex_tasks.parameters.required, []);
+  const selected = await h.call('rex_tasks', { id: one.id });
+  assert.deepEqual(selected.details.map(row => row.id), [one.id]);
+  assert.deepEqual(inspected, [one.id]);
+  assert.equal((await h.call('rex_tasks', { id: '../other' })).isError, true);
+  assert.equal((await h.call('rex_tasks', { id: '00000000-0000-0000-0000-000000000000' })).isError, true);
+  assert.equal((await h.call('rex_tasks', {})).details.length, 2);
+});
+
+test('finish explains failed and interrupted outcomes without silently closing them', async t => {
+  let closes = 0;
+  const h = await fixture(t, { control: async () => { closes++; } });
+  await h.events.session_start({}, h.ctx);
+  for (const outcome of ['failed', 'interrupted']) {
+    const run = await prepareRun(h.root, { kind: 'agent', name: outcome, block: 'block' }, '');
+    await atomicJson(join(run.dir, 'activity.json'), { task: outcome, process: 'idle' });
+    await atomicJson(join(run.dir, 'result.json'), { status: outcome });
+    const response = await h.call('rex_finish', { id: run.id });
+    assert.equal(response.isError, true);
+    assert.match(response.details.error, new RegExp(`task=${outcome}`));
+    assert.match(response.details.error, /process=idle/);
+    assert.match(response.details.error, /rex_control.*close/);
+    assert.equal((await readJson(join(run.dir, 'run.json'))).closed, undefined);
+  }
+  assert.equal(closes, 0);
+});
+
+test('repeated task-manager commands share one panel and a later invocation can reopen it', async t => {
+  const h = await fixture(t);
+  await h.events.session_start({}, h.ctx);
+  const overlays = [];
+  h.ctx.ui.custom = factory => new Promise(resolve => {
+    overlays.push(factory({ terminal: { rows: 24 }, requestRender() {} }, {},
+      { matches: (data, key) => data === key }, resolve));
+  });
+  const first = h.commands['rex-tasks'].handler('', h.ctx);
+  const repeated = h.commands['rex-tasks'].handler('', h.ctx);
+  await until(() => overlays.length > 0);
+  await delay(20);
+  const opened = overlays.length;
+  // Always settle all panels, including the duplicate created by the old code.
+  for (const overlay of overlays) overlay.handleInput('tui.select.cancel');
+  await Promise.all([first, repeated]);
+  assert.equal(opened, 1);
+  const reopened = h.commands['rex-tasks'].handler('', h.ctx);
+  await until(() => overlays.length === 2);
+  overlays[1].handleInput('tui.select.cancel');
+  await reopened;
+});
+
 async function runnerFixture(t, task) {
   const dir = await mkdtemp(join(tmpdir(), 'rex-runner-'));
   const run = await prepareRun(dir, { kind: 'shell', task, cwd: dir }, '');

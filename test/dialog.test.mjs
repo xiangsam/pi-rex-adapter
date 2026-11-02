@@ -103,3 +103,15 @@ test('reopening a menu restores selected ID and scroll offset after viewing deta
   reopened.component.handleInput('tui.select.confirm');
   assert.deepEqual(reopened.results, ['id-19']);
 });
+
+test('a dismissed dialog ignores queued confirmation, navigation and cancellation', () => {
+  for (const first of ['cancel', 'confirm']) {
+    const state = {};
+    const h = component({ title: 'Tasks', state, choices: [{ value: 'one', label: 'One' }, { value: 'two', label: 'Two' }] });
+    h.component.render(60);
+    h.component.handleInput(`tui.select.${first}`);
+    for (const key of ['down', 'confirm', 'cancel']) h.component.handleInput(`tui.select.${key}`);
+    assert.deepEqual(h.results, [first === 'confirm' ? 'one' : undefined]);
+    assert.equal(state.value, 'one');
+  }
+});

@@ -27,7 +27,7 @@ export default function adapter(pi, dependencies = {}) {
   let config = { ...DEFAULT_CONFIG };
   const ui = (key, values) => t(config.language, key, values);
   const dialogs = createDialogs(() => config.language);
-  let actionTimer;
+  let actionTimer, taskPanel;
   let overviewEnabled = true, overviewRows = [];
   const inbox = new Map();
   const closing = new Map();
@@ -233,6 +233,7 @@ export default function adapter(pi, dependencies = {}) {
   });
   function stop() {
     dialogs.closeAll(); clearTimeout(actionTimer);
+    taskPanel = undefined;
     if (current?.hasUI) current.ui.setStatus('rex-action', undefined);
     if (uiKey !== 'empty') showOverview(current, [], false);
     if (current?.hasUI && statusText) current.ui.setStatus('rex', undefined);
@@ -319,6 +320,19 @@ export default function adapter(pi, dependencies = {}) {
     if (!run || run.id !== id.trim() || run.dir !== join(runRoot, id.trim())) throw new Error('Unknown task ID in this parent session');
     return run;
   }
+  async function taskStates(run) {
+    const [exit, result, activity] = await Promise.all(['exit', 'result', 'activity']
+      .map(file => readJson(join(run.dir, `${file}.json`))));
+    return runStates(run, exit, result, activity);
+  }
+  async function logs(run) {
+    try { return { output: await tailFile(join(run.dir, 'output.log')), logAvailable: true }; }
+    catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      return { output: '', logAvailable: false,
+        note: 'No output log is available for this task. Agent and BTW conversations use Pi sessions; use rex_tasks({id}) for the task result.' };
+    }
+  }
   async function control(id, action, requestedSignal) {
     const signal = signalFor(requestedSignal); signal.throwIfAborted();
     const epoch = generation;
@@ -328,22 +342,31 @@ export default function adapter(pi, dependencies = {}) {
       if (action === 'interrupt' && run.kind === 'shell') throw new Error('Use close/bg_kill to stop a shell task; Escape only interrupts Pi turns.');
       signal.throwIfAborted();
       await (await rex()).control(run, action, signal);
-      return { id: run.id, action, status: run.status };
+      const states = await taskStates(run);
+      return { id: run.id, action, status: states.taskState, ...states };
     }
     const controlRoot = root;
     const task = withLayoutLock(controlRoot, async () => {
       signal.throwIfAborted();
       const run = await owned(id, controlRoot);
-      if (run.closed) return { id: run.id, action, status: run.status, closed: true };
+      if (run.closed) {
+        const states = await taskStates(run);
+        if (run.status !== states.taskState) {
+          run.status = states.taskState;
+          await atomicJson(join(run.dir, 'run.json'), run);
+        }
+        return { id: run.id, action, status: states.taskState, ...states, closed: true };
+      }
       // Snapshot before sending close: the close itself can write exit.json.
       const exitBeforeClose = await readJson(join(run.dir, 'exit.json'));
       const activity = await readJson(join(run.dir, 'activity.json'));
       if (action === 'finish') {
         const result = await readJson(join(run.dir, 'result.json'));
         if (run.kind === 'btw') throw new Error('BTW is kept open; use explicit close if requested.');
-        if (runStates(run, exitBeforeClose, result, activity).taskState !== 'completed' ||
+        const states = runStates(run, exitBeforeClose, result, activity);
+        if (states.taskState !== 'completed' ||
             (!exitBeforeClose && activity?.process !== 'idle')) {
-          throw new Error('Task is not completed and idle/exited. Leave it open for further work or diagnosis.');
+          throw new Error(`Cannot finish: task=${states.taskState}, process=${states.processState}. rex_finish requires a completed task and an idle or exited process. Keep it open for follow-up, or after reviewing the outcome explicitly stop and close it with rex_control({id: "${run.id}", action: "close"}).`);
         }
       }
       signal.throwIfAborted();
@@ -353,20 +376,23 @@ export default function adapter(pi, dependencies = {}) {
       if (!exitBeforeClose && !idle) run.status = 'cancelled';
       if (idle && !exitBeforeClose) { run.completedBeforeClose = true; run.taskCompletedBeforeClose = true; }
       run.closed = true;
+      const states = await taskStates(run);
+      run.status = states.taskState;
       await atomicJson(join(run.dir, 'run.json'), run);
       // Discard stale observations collected before cancellation completed.
       if (epoch === generation) {
         tracked.set(run.id, run.dir); monitor();
         for (const [receipt, item] of inbox) if (item.id === run.id) inbox.delete(receipt);
       }
-      return { id: run.id, action, status: run.status, closed: true };
+      return { id: run.id, action, status: states.taskState, ...states, closed: true };
     });
     closing.set(id.trim(), task);
     try { return await task; } finally { if (closing.get(id.trim()) === task) closing.delete(id.trim()); if (epoch === generation) void reconcile(); }
   }
-  async function status(_params, _ctx, signal) {
+  async function status(params, _ctx, signal) {
     signal?.throwIfAborted();
-    return Promise.all((await listRuns(root)).map(async r => {
+    const runs = params.id === undefined ? await listRuns(root) : [await owned(params.id)];
+    return Promise.all(runs.map(async r => {
       const exit = await readJson(join(r.dir, 'exit.json'));
       const result = await readJson(join(r.dir, 'result.json'));
       const activity = await readJson(join(r.dir, 'activity.json'));
@@ -420,6 +446,7 @@ export default function adapter(pi, dependencies = {}) {
       run.closed = true; run.completedBeforeClose = Boolean(exit);
       if (!exit && activity?.process === 'idle') { run.completedBeforeClose = true; run.taskCompletedBeforeClose = true; }
       else if (!exit) run.status = 'cancelled';
+      run.status = (await taskStates(run)).taskState;
       run.resolvedAt = new Date().toISOString(); run.resolution = 'User confirmed the resource is absent and its process stopped.';
       await atomicJson(join(run.dir, 'run.json'), run);
       if (epoch === generation) {
@@ -430,7 +457,8 @@ export default function adapter(pi, dependencies = {}) {
   pi.registerCommand('rex-tasks', {
     description: 'Open the Rex task manager overlay: history, details, logs, actions and overview settings',
     handler: async (_args, ctx) => {
-      if (!ctx.hasUI) return;
+      if (!ctx.hasUI || taskPanel) return;
+      const panel = {}; taskPanel = panel;
       const epoch = generation, listState = {};
       const valid = () => { if (epoch !== generation) throw new Error('Parent session changed; reopen /rex-tasks.'); };
       try {
@@ -470,7 +498,8 @@ export default function adapter(pi, dependencies = {}) {
                   '', ui('result'), row.summary || ui('noResult'), row.error || '', row.cleanupError || '',
                   '', ui('cwd', { value: row.cwd || '' }), ui('taskId', { value: row.id }), ui('artifacts', { value: row.artifacts })].join('\n'));
               } else if (action === 'logs') {
-                await dialogs.view(ctx, ui('logTitle', { name: plain(row.name) }), await tailFile(join(run.dir, 'output.log')));
+                const log = await logs(run);
+                await dialogs.view(ctx, ui('logTitle', { name: plain(row.name) }), log.logAvailable ? log.output : ui('noLogs'));
               } else if (action === 'resolve') {
                 const confirmed = await dialogs.select(ctx, ui('resolveTitle'), [
                   { value: false, label: ui('keepRecord') },
@@ -490,6 +519,8 @@ export default function adapter(pi, dependencies = {}) {
         }
       } catch (error) {
         if (epoch === generation) await dialogs.view(ctx, ui('actionError'), error.message);
+      } finally {
+        if (taskPanel === panel) taskPanel = undefined;
       }
     },
   });
@@ -522,8 +553,8 @@ export default function adapter(pi, dependencies = {}) {
   tool('btw', 'Reuse the parent side conversation, or create it on the right. Supply task to queue a question; omit task to focus. Only /btw-return sends conclusions back.', schema(fields), (p, ctx, signal) => launch('btw', p, ctx, signal));
   tool('bg_run', 'Run a long shell command in a background Rex block. Use for builds/tests/servers that should not block the main task. Completion reports exit code and output automatically; do not poll.', schema({ command: string, name: string, cwd: string }, ['command']), (p, ctx, signal) => launch('shell', { ...p, task: p.command }, ctx, signal));
   tool('rex_finish', 'After reviewing a completed agent/shell result, close its block. Requires a completed task and an idle or exited process; rejects BTW and active/failed tasks. Retains records.', schema({ id: string }, ['id']), (p, _ctx, signal) => control(p.id, 'finish', signal));
-  tool('rex_tasks', 'Inspect owned task metadata on explicit request or for diagnosis. Completion is automatic.', schema({}), status);
-  tool('bg_logs', 'Read the last 16 KB of task output for diagnosis. Do not poll for completion.', schema({ id: string }, ['id']), async p => ({ output: await tailFile(join((await owned(p.id)).dir, 'output.log')) }));
+  tool('rex_tasks', 'Inspect owned tasks, or one task by optional id. Always returns an array. Completion is automatic; do not poll.', schema({ id: string }), status);
+  tool('bg_logs', 'Read the last 16 KB of shell output for diagnosis. Returns logAvailable=false when no log exists; agent/BTW results are in rex_tasks. Do not poll for completion.', schema({ id: string }, ['id']), async p => logs(await owned(p.id)));
   tool('bg_kill', 'Stop an owned background shell task by closing its Rex block.', schema({ id: string }, ['id']), async (p, _ctx, signal) => {
     if ((await owned(p.id)).kind !== 'shell') throw new Error('Not a shell task');
     return control(p.id, 'close', signal);
