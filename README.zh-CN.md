@@ -143,7 +143,7 @@ Shell block 在结果确认送达后自动清理；子 agent 由主 agent 通过
 
 ## 发布版本
 
-发布 GitHub Release 后，[npm 工作流](.github/workflows/publish.yml)会校验 tag 与 `package.json` 版本一致，通过 `prepublishOnly` 执行语法检查和测试，再发布带来源证明的 npm 包。正式版更新 `latest`；例如 `0.2.0-beta.1` 的 GitHub 预发布版本更新 `next`。
+推送 `v*` tag 后，[发版工作流](.github/workflows/publish.yml)会校验 tag 与 `package.json` 版本一致，执行语法检查和测试，自动创建带更新说明的 GitHub Release，再发布带来源证明的 npm 包。例如 `0.2.0-beta.1` 会自动标记为 GitHub 预发布版并更新 npm 的 `next`；正式版更新 `latest`。两个操作在同一个工作流内完成，因为使用 `GITHUB_TOKEN` 创建的 Release 不会触发另一个 Release 工作流。
 
 维护者只需配置一次：在 npm 包的 **Settings → Trusted Publisher** 选择 **GitHub Actions**，填写：
 
@@ -157,13 +157,17 @@ Shell block 在结果确认送达后自动清理；子 agent 由主 agent 通过
 
 使用 [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers/)，无需添加 `NPM_TOKEN` secret。首次自动发布前，需要先在 npm 保存上述配置。
 
-之后每次发版：
+之后每次发版，将 `package.json` 改为尚未发布的新版本并提交，再从 Git 克隆仓库推送对应 tag。例如版本 `0.1.1` 已提交时：
 
-1. 将 `package.json` 改为尚未发布的新版本，与本次改动一起提交到 GitHub。
-2. 创建 GitHub Release，使用对应 tag，例如 `v0.1.1`，指向该提交。如果版本带预发布后缀，同时勾选 **Set as a pre-release**。
-3. 点击 **Publish release**，在 **Actions → Publish to npm** 查看结果。只保存草稿或推送 tag 不会发布 npm。
+```sh
+git push origin main
+git tag v0.1.1
+git push origin v0.1.1
+```
 
-工作流发布 tag 指向的提交，该提交必须包含工作流和更新后的版本号。npm 不允许覆盖版本，`0.1.0` 已经发布；README 改动会随下一个版本更新到 npm。若在上传前失败，修复原因后可重跑；若该版本已经发布，后续改动需使用新版本。
+在 **Actions → Release and publish to npm** 查看结果，无需手动创建 Release。推送分支、编辑 Release 都不会发布 npm。tag 指向的提交必须包含此工作流和对应的包版本；推送 tag 不会自动修改版本号。
+
+如果 npm 发布失败，GitHub Release 可能已经创建。修复原因后重跑失败的工作流即可，它会复用已有 Release。npm 不允许覆盖版本；如果已经发布成功，后续改动需使用新版本。README 改动会随下一个版本更新到 npm。
 
 ## 验证
 

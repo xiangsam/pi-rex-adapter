@@ -1,8 +1,8 @@
-name: Publish to npm
+name: Release and publish to npm
 
 on:
-  release:
-    types: [published]
+  push:
+    tags: ['v*']
 
 permissions:
   contents: read
@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - name: Check out the release commit
@@ -40,21 +40,39 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           import { readFileSync, appendFileSync } from 'node:fs';
-          const { release } = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+          const tag = process.env.GITHUB_REF_NAME;
           const { name, version } = JSON.parse(readFileSync('package.json', 'utf8'));
-          if (name !== 'pi-rex-adapter' || release.tag_name !== `v${version}`) {
-            throw new Error(`Expected pi-rex-adapter release tag v${version}; got ${release.tag_name}`);
+          if (name !== 'pi-rex-adapter' || tag !== `v${version}`) {
+            throw new Error(`Expected pi-rex-adapter release tag v${version}; got ${tag}`);
           }
           const prerelease = version.split('+')[0].includes('-');
-          if (release.prerelease !== prerelease) {
-            throw new Error('GitHub pre-release setting must match the package version suffix.');
-          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `prerelease=${prerelease}\n`);
           appendFileSync(process.env.GITHUB_OUTPUT, `dist_tag=${prerelease ? 'next' : 'latest'}\n`);
           NODE
 
-      # prepublishOnly runs syntax checks and the test suite before uploading.
       # This package has no dependencies, so no install or build step is needed.
-      - name: Check, test, and publish with OIDC
-        run: npm publish --access public --provenance --tag "$DIST_TAG"
+      - name: Run release checks
+        run: npm run prepublishOnly
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ steps.release.outputs.prerelease }}
+        run: |
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; continuing to npm."
+          else
+            args=("$RELEASE_TAG" --verify-tag --generate-notes --title "$RELEASE_TAG")
+            if [[ "$PRERELEASE" == "true" ]]; then
+              args+=(--prerelease --latest=false)
+            fi
+            gh release create "${args[@]}"
+          fi
+
+      # The release checks above already ran prepublishOnly.
+      - name: Publish to npm with OIDC
+        run: npm publish --ignore-scripts --access public --provenance --tag "$DIST_TAG"
         env:
           DIST_TAG: ${{ steps.release.outputs.dist_tag }}

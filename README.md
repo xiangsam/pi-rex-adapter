@@ -245,7 +245,7 @@ The development environment could not access the Rex socket, so real Rex layout,
 
 ## Publishing releases
 
-Publishing a GitHub Release triggers [the npm workflow](.github/workflows/publish.yml). It checks that the release tag matches `package.json`, runs syntax checks and the test suite through `prepublishOnly`, then publishes with provenance. Stable releases use npm's `latest` tag; GitHub pre-releases with a version such as `0.2.0-beta.1` use `next`.
+Pushing a `v*` tag triggers [the release workflow](.github/workflows/publish.yml). It checks that the tag matches `package.json`, runs syntax checks and the test suite, creates a GitHub Release with generated notes, then publishes to npm with provenance. Versions such as `0.2.0-beta.1` automatically become GitHub pre-releases and use npm's `next` tag; stable versions use `latest`. Both operations run in the same workflow: a release created using `GITHUB_TOKEN` does not trigger another release workflow.
 
 One-time maintainer setup: in the npm package's **Settings → Trusted Publisher**, select **GitHub Actions** and enter:
 
@@ -259,13 +259,17 @@ One-time maintainer setup: in the npm package's **Settings → Trusted Publisher
 
 This uses [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/); no `NPM_TOKEN` secret is needed. The npm-side configuration must be saved before the first automated release.
 
-For each release:
+For each release, update `package.json` to a new, unpublished version, commit the changes, and push the matching tag from a Git clone. For example, with version `0.1.1` already committed:
 
-1. Update `package.json` to a new, unpublished version and commit it to GitHub along with the intended changes.
-2. Create a GitHub Release with the matching tag, e.g. `v0.1.1`, targeting that commit. For a version with a prerelease suffix, also select **Set as a pre-release**.
-3. Click **Publish release**, then check **Actions → Publish to npm**. A draft release or a tag push alone does not publish anything.
+```sh
+git push origin main
+git tag v0.1.1
+git push origin v0.1.1
+```
 
-The workflow publishes the tagged commit, so that commit must contain the workflow and the updated version. npm versions cannot be overwritten: `0.1.0` is already published. README changes reach npm with the next package version. If a run fails before publication, fix the cause and rerun it; if the version is already on npm, use a new version for further changes.
+Check **Actions → Release and publish to npm** for the result. There is no need to create a Release manually. Branch pushes and Release edits do not publish npm. The tag must point to a commit containing this workflow and the matching package version; pushing a tag does not change the version for you.
+
+If npm publication fails, the GitHub Release may already exist. Fix the cause and rerun the failed workflow; it reuses the existing Release. npm versions cannot be overwritten: if publication already succeeded, use a new version for further changes. README changes reach npm with the next package version.
 
 ## Acknowledgments
 
