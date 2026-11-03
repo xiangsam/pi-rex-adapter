@@ -111,6 +111,8 @@ BTW enables only `read,grep,find,ls` by default and disables MCP. This is a tool
 
 ## Interactive subagents
 
+Subagents launch with Pi's `--approve` flag, trusting project-local files for that run so a new `cwd` does not wait for a folder-trust prompt. This includes project configuration and extensions; it does not save a permanent trust decision. The flag applies to delegated agents started through `subagent` or `/rex-agent`.
+
 `/rex-agent` starts a **full interactive Pi**, without `--print`, in an Agents tab. Every settled turn returns its answer to the parent. The Pi session remains open, so you can focus it and continue the conversation; later turns produce separate reports.
 
 After reviewing a completed result, the main agent calls `rex_finish` when no further interaction is needed. This requires a completed task with an idle or exited process. It will not finish an active task or a BTW conversation. Failed or interrupted tasks stay available for diagnosis or follow-up; after reviewing them, use `rex_control({id, action: "close"})` to explicitly close them. Closing is a main-agent action, not a child that exits itself.

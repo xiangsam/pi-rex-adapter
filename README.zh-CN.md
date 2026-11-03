@@ -85,6 +85,8 @@ pi -e git:github.com/xiangsam/pi-rex-adapter
 
 未指定名称时，任务名使用任务首行的短摘要，避免历史列表只显示时间戳。
 
+通过 `subagent` 或 `/rex-agent` 启动的子 agent 会携带 Pi 的 `--approve` 参数，仅为本次运行信任项目本地文件（包括项目配置和扩展），避免指定新 `cwd` 时等待目录信任确认；不会保存永久信任决定。
+
 `/rex-agent` 在 Agents 分组 tab 的独立 terminal block 中启动完整交互式 Pi（不使用 `--print`）。每轮任务 settled 后自动回传该轮回答，Pi 会话保持打开；可聚焦该 block 继续输入下一轮，后续回答也分别回传。主 agent 处理完完成结果、确认无需继续交互后调用 `rex_finish` 关闭该 block；工具会检查任务已完成且进程 idle/已退出，不会关闭正在运行的任务或 BTW。这由主 agent 调用执行，不是子进程自行关闭。子进程默认不注册本 adapter 的委派工具。子任务共享工作目录；并行写入请通过工具的 `cwd` 指定事先准备的独立 checkout。此版本不自动管理 worktree、角色包、模型 fallback 或持久 specialist。
 
 ## 主页面任务概览
