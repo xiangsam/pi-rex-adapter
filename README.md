@@ -92,6 +92,8 @@ The pane limit affects future launches only. Existing panes are not moved, resiz
 
 `/btw <question>` opens a full interactive Pi in the **right half of the parent block**, keeping focus on the main conversation by default. Click the pane, run `/btw` without a question, or choose **Focus task** in `/rex-tasks` to enter it.
 
+New side sessions are named `BTW · <name>` and show their original topic in one muted line above the editor. After an answer, the footer says “Answer ready · optionally share with /btw-return”. Sharing is optional: normal answers create no parent return message. An explicit return changes the footer to “Conclusion queued · ready to continue”.
+
 The conversation has its own Pi session. By default it inherits the parent's model, thinking level, and a text snapshot of the current branch: up to 48,000 recent characters, including summaries but excluding images, thinking, and tool output. This is a text snapshot, not a complete Pi session clone.
 
 Further `/btw <question>` calls reuse the same conversation and history. Questions go through a file inbox into Pi's input API; no terminal keystrokes are simulated. Questions arriving while the child is busy are combined when it becomes idle. The original context snapshot is retained, so include any newer background in the question itself.
@@ -115,6 +117,8 @@ Subagents launch with Pi's `--approve` flag, trusting project-local files for th
 
 `/rex-agent` starts a **full interactive Pi**, without `--print`, in an Agents tab. Every settled turn returns its answer to the parent. The Pi session remains open, so you can focus it and continue the conversation; later turns produce separate reports.
 
+New agent sessions are named `Agent · <name>`, which Pi includes in its terminal title. A single muted line shows the original assignment above the editor; the footer distinguishes starting, running, failed, interrupted, and “Result queued · awaiting parent review”. Queued means the report has been written for the parent, not that the parent has already received or reviewed it. These hints follow the configured UI language and never append messages to the conversation. Pi 1.4's own program-status reporter continues to handle Rex working/blocked/done/error states; the adapter does not override it or add a status polling loop.
+
 After reviewing a completed result, the main agent calls `rex_finish` when no further interaction is needed. This requires a completed task with an idle or exited process. It will not finish an active task or a BTW conversation. Failed or interrupted tasks stay available for diagnosis or follow-up; after reviewing them, use `rex_control({id, action: "close"})` to explicitly close them. Closing is a main-agent action, not a child that exits itself.
 
 Child sessions do not register this adapter's delegation tools. Tasks share a working directory unless the main agent supplies another `cwd`. For parallel writers, prepare separate checkouts and pass their paths explicitly. The adapter does not create worktrees or manage role packs, model fallbacks, or persistent specialists.
@@ -124,6 +128,12 @@ If no name is supplied, the task's first line becomes a short, readable name.
 ## Background shell jobs
 
 `/bg` runs `/bin/sh -c` in a dedicated terminal block in a Jobs tab, using the parent's working directory by default and closed stdin.
+
+The pane immediately shows the task name, working directory, and complete submitted command, including multiline commands. Live output follows; when the command exits, a short summary shows its outcome, exit code or signal, and elapsed time. A silent command is explicitly marked as producing no output. Headings use muted blue and follow the configured UI language. These display lines are separate from `output.log` and the result sent to the parent.
+
+The runner sets a terminal title and reports working/done/error states through [Rex's program status protocol](https://www.superlogical.com/rex/docs/build/program-status), so Rex can display the task state without polling. Cancellation reports idle. Output remains available in Rex's scrollback while the pane is open; closing after result delivery follows the same policy as before.
+
+Shell output is still captured through pipes to preserve full logs and process-group cancellation. Python receives `PYTHONUNBUFFERED=1` by default so ordinary `print()` output appears promptly; an existing value is preserved. Other programs may need their own flush/progress options when stdout is not a TTY. Output redirected by the command to another file is not automatically tailed.
 
 Full stdout and stderr are written to `output.log` and displayed in the block. Both destinations apply backpressure; a write failure stops the shell and attempts to record the failure. When the command exits, the parent receives its exit code, the last 16,000 characters of output, and the artifact path. A long-running server reports completion only when it exits.
 
@@ -233,7 +243,7 @@ npm pack --dry-run
 
 The regression suite covers CLI arguments, context snapshots, interactive Pi startup, real shell success and failure, bounded result payloads, batching and deduplication, ownership, cancellation, close races, layout overflow and restoration, BTW reuse and input confirmation, task overlays, cleanup after delivery, and manual recovery. It also covers slow-terminal backpressure, log failures, process-group termination, configuration precedence, language switching, and configurable pane limits. Registration has been checked with the Pi 1.4.0 extension loader.
 
-The development environment could not access the Rex socket, so real Rex layout, focus, and close behavior still require end-to-end verification. Suggested smoke tests inside Rex:
+A real Rex shell smoke test verifies the command header, title, native working/done status, stdout/stderr, and Python output arriving before process exit, with display text excluded from retained logs. Broader layout, focus, and lifecycle scenarios still need end-to-end verification. Suggested smoke tests inside Rex:
 
 1. `/bg printf hello`: receive `exit=0` and `hello`, then see the pane close after delivery.
 2. `/bg sleep 5; echo done; exit 7`: continue working while the job runs, then receive the nonzero exit.

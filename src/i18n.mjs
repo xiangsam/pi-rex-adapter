@@ -1,6 +1,9 @@
 // UI text only. Tool names, structured states, task output and diagnostics stay intact.
 const messages = {
   en: {
+    shellRunning: 'Running · live output follows', shellNoOutput: 'The command produced no output.',
+    childAssignment: 'Assigned task: {task}', childTopic: 'Side topic: {task}', childAgentDone: 'Result queued · awaiting parent review',
+    childBtwDone: 'Answer ready · optionally share with /btw-return', childReturned: 'Conclusion queued · ready to continue',
     title: 'Rex Tasks', running: 'Running', completed: 'Completed', failed: 'Failed', interrupted: 'Interrupted',
     cancelled: 'Cancelled', launching: 'Starting', uncertain: 'Needs review', exited: 'Exited',
     closed: 'Closed', idle: 'Pi idle', processExited: 'Process exited', processUnknown: 'Process unverified',
@@ -27,6 +30,9 @@ const messages = {
     returned: 'Conclusion queued for the parent session', configWarning: 'Rex configuration: {message}',
   },
   zh: {
+    shellRunning: '运行中 · 下方显示实时输出', shellNoOutput: '命令未产生输出。',
+    childAssignment: '委派任务：{task}', childTopic: '侧聊主题：{task}', childAgentDone: '结果已排队 · 等待主 agent 处理',
+    childBtwDone: '答案已就绪 · 可用 /btw-return 回传', childReturned: '结论已排队 · 可继续侧聊',
     title: 'Rex 任务', running: '运行中', completed: '已完成', failed: '失败', interrupted: '已中断',
     cancelled: '已取消', launching: '启动中', uncertain: '待核实', exited: '已结束',
     closed: '已关闭', idle: 'Pi 待命', processExited: '进程已退出', processUnknown: '进程待核实',

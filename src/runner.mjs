@@ -5,19 +5,26 @@ import { createWriteStream } from 'node:fs';
 import { once } from 'node:events';
 import { finished } from 'node:stream/promises';
 import { atomicJson, readJson, piArgs } from './core.mjs';
+import { loadConfig } from './config.mjs';
+import { shellStart, shellEnd } from './shell-display.mjs';
 
 // This wrapper runs in the Rex block, not in the parent Pi process.
 const dir = process.argv[2];
 const run = await readJson(join(dir, 'run.json'));
 const extension = fileURLToPath(new URL('./index.mjs', import.meta.url));
 const shell = run.kind === 'shell';
+const display = shell && process.stdout.isTTY;
+const language = display ? (await loadConfig(run.configCwd || run.cwd)).config.language : 'en';
+const startedAt = Date.now();
 const script = !shell && /\.[cm]?js$/.test(run.piBin);
 await atomicJson(join(dir, 'activity.json'), { task: 'running', process: 'running', at: new Date().toISOString() });
 const grouped = shell && process.platform !== 'win32';
 const child = spawn(shell ? (run.shell || '/bin/sh') : script ? process.execPath : run.piBin,
   shell ? ['-c', run.task] : [...(script ? [run.piBin] : []), ...piArgs(run, extension)], {
   cwd: run.cwd, stdio: shell ? ['ignore', 'pipe', 'pipe'] : 'inherit', detached: grouped,
-  env: { ...process.env, PATH: run.path || process.env.PATH, PI_REX_RUN_DIR: dir },
+  env: { ...process.env,
+    ...(shell && process.env.PYTHONUNBUFFERED === undefined ? { PYTHONUNBUFFERED: '1' } : {}),
+    PATH: run.path || process.env.PATH, PI_REX_RUN_DIR: dir },
 });
 let outputTail = '', outputError, escalation;
 const outputAbort = new AbortController();
@@ -45,10 +52,12 @@ const pumps = [];
 if (shell) {
   log.on('error', failedOutput);
   process.stdout.on('error', failedOutput); process.stderr.on('error', failedOutput);
+  const header = display ? write(process.stdout, shellStart(run, language)).catch(failedOutput) : Promise.resolve();
   for (const [stream, terminal] of [[child.stdout, process.stdout], [child.stderr, process.stderr]]) {
     stream.setEncoding('utf8');
     pumps.push((async () => {
       try {
+        await header;
         for await (const text of stream) {
           outputTail = (outputTail + text).slice(-16000);
           // Await both sinks before consuming more data; bound buffering even if
@@ -60,7 +69,7 @@ if (shell) {
   }
 }
 let recorded = false;
-async function finish(code, error) {
+async function finish(code, error, signal) {
   if (recorded) return;
   recorded = true;
   await Promise.all(pumps);
@@ -69,8 +78,13 @@ async function finish(code, error) {
     log.end();
     try { await flushed; } catch (error) { failedOutput(error); }
   }
-  clearTimeout(escalation);
   if (outputError) { error = [error, outputError].filter(Boolean).join('; '); code = code || 1; }
+  if (display && !outputError) {
+    try { await write(process.stdout, shellEnd(run, { code, error, signal,
+      elapsedMs: Date.now() - startedAt, hasOutput: Boolean(outputTail) }, language)); }
+    catch (displayError) { failedOutput(displayError); error = [error, outputError].filter(Boolean).join('; '); code = code || 1; }
+  }
+  clearTimeout(escalation);
   if (shell) await atomicJson(join(dir, 'result.json'), {
     text: outputTail || '(no output)', status: code === 0 ? 'completed' : 'failed', createdAt: new Date().toISOString(),
   });
@@ -78,5 +92,5 @@ async function finish(code, error) {
   process.exitCode = code ?? 1;
 }
 child.on('error', error => { void finish(1, error.message); });
-child.on('close', (code, signal) => { void finish(code, signal ? `Terminated by ${signal}` : undefined); });
+child.on('close', (code, signal) => { void finish(code, signal ? `Terminated by ${signal}` : undefined, signal); });
 for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, () => terminate(signal));

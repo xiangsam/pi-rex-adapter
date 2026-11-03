@@ -83,9 +83,19 @@ pi -e git:github.com/xiangsam/pi-rex-adapter
 
 `/bg` 将 shell 命令放到Jobs 分组 tab 中的独立 terminal block，stdin 关闭，使用 `/bin/sh -c`，工作目录默认与父 Pi 相同。完整 stdout/stderr 写入 `output.log`，同时在 block 展示；两端均处理背压，写入失败时停止 shell 并尽量保存失败记录；结束时回传退出码、最后 16,000 字符和日志路径。长驻 server 直到退出才产生完成结果。命令结束后进程立即退出；主线会话确认持久化收到结果后（包括非零退出），扩展自动关闭它的 block，保留日志与任务记录。仅排入消息队列不算送达；父 Pi 离线时会等它恢复、接收结果后再清理。它适合启动前就决定放后台的构建、测试和服务；**此版本不接管已经运行的内置 bash，也未实现 Ctrl+B/超时自动转后台**，避免重跑正在执行的命令。
 
+Shell pane 启动后立即显示任务名、工作目录和完整提交命令（支持多行），随后显示实时输出；结束时显示结果、退出码或信号及耗时，无输出时也会明确说明。标题采用低饱和蓝色，提示遵循 `language` 配置。这些展示文字不写入 `output.log`，也不混入回传给主 agent 的结果。
+
+Runner 设置终端标题，并通过 [Rex 原生程序状态协议](https://www.superlogical.com/rex/docs/build/program-status)报告 working/done/error，取消时报告 idle，无需轮询。pane 打开期间可在 Rex 中滚动查看输出；结果送达后的自动关闭规则保持不变。
+
+为保留完整日志和进程组取消能力，命令输出仍使用管道采集。默认给 Python 设置 `PYTHONUNBUFFERED=1`，使普通 `print()` 尽快显示；已有环境变量值会保留。其他程序仍可能需要自身的刷新/进度参数；命令主动重定向到其他文件的内容不会被自动跟读。
+
 未指定名称时，任务名使用任务首行的短摘要，避免历史列表只显示时间戳。
 
 通过 `subagent` 或 `/rex-agent` 启动的子 agent 会携带 Pi 的 `--approve` 参数，仅为本次运行信任项目本地文件（包括项目配置和扩展），避免指定新 `cwd` 时等待目录信任确认；不会保存永久信任决定。
+
+新建子会话名区分 `Agent · <名称>` 与 `BTW · <名称>`，Pi 会将其显示在终端标题中。编辑器上方用低饱和蓝色单行展示原始委派任务或侧聊主题；底部显示启动、运行、失败、中断等状态。Agent 完成后显示“结果已排队 · 等待主 agent 处理”，仅表示回报文件已写入，并不表示主 agent 已收到或审阅。
+
+BTW 回传是可选操作：普通回答结束后提示“答案已就绪 · 可用 /btw-return 回传”，不会自动生成主会话回传消息；只有显式执行 `/btw-return` 才显示“结论已排队 · 可继续侧聊”。上述提示同时支持英文与中文，遵循 `language` 配置，不向对话正文追加状态消息。Rex 的 working/blocked/done/error 仍由 Pi 1.4 原生报告，插件不重复接管、不增加状态轮询。
 
 `/rex-agent` 在 Agents 分组 tab 的独立 terminal block 中启动完整交互式 Pi（不使用 `--print`）。每轮任务 settled 后自动回传该轮回答，Pi 会话保持打开；可聚焦该 block 继续输入下一轮，后续回答也分别回传。主 agent 处理完完成结果、确认无需继续交互后调用 `rex_finish` 关闭该 block；工具会检查任务已完成且进程 idle/已退出，不会关闭正在运行的任务或 BTW。这由主 agent 调用执行，不是子进程自行关闭。子进程默认不注册本 adapter 的委派工具。子任务共享工作目录；并行写入请通过工具的 `cwd` 指定事先准备的独立 checkout。此版本不自动管理 worktree、角色包、模型 fallback 或持久 specialist。
 

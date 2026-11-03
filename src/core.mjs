@@ -122,7 +122,8 @@ export async function prepareRun(root, options, context) {
   return run;
 }
 export function piArgs(run, extension) {
-  const args = ['--session', join(run.dir, 'session.jsonl'), '--name', run.name, '-e', extension];
+  const name = `${run.kind === 'btw' ? 'BTW' : 'Agent'} · ${run.name}`;
+  const args = ['--session', join(run.dir, 'session.jsonl'), '--name', name, '-e', extension];
   // Trust delegated project-local files for this run without persisting approval.
   if (run.kind === 'agent') args.push('--approve');
   if (run.model) args.push('--model', run.model);

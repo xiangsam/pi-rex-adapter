@@ -77,6 +77,20 @@ test('successful shell retains full log but bounds completion payload', async t 
   assert.equal((await readFile(join(run.dir, 'output.log'), 'utf8')).length, 30000);
 });
 
+test('shell jobs default Python to unbuffered output and preserve an explicit setting', async t => {
+  const root = await temporary(t);
+  for (const configured of [undefined, '', '0']) {
+    const env = { ...process.env };
+    if (configured === undefined) delete env.PYTHONUNBUFFERED;
+    else env.PYTHONUNBUFFERED = configured;
+    const run = await prepareRun(root, { kind: 'shell', cwd: root,
+      task: `${JSON.stringify(process.execPath)} -p 'process.env.PYTHONUNBUFFERED'` }, '');
+    const child = spawn(process.execPath, [resolve('src/runner.mjs'), run.dir], { stdio: 'ignore', env });
+    assert.equal((await once(child, 'close'))[0], 0);
+    assert.equal((await readFile(join(run.dir, 'output.log'), 'utf8')).trim(), configured ?? '1');
+  }
+});
+
 function harness(root, entries = [], dependencies = {}) {
   const events = {}, commands = {}, tools = {}, messages = [];
   const ctx = { cwd: root, hasUI: false, isIdle: () => true, sessionManager: {
