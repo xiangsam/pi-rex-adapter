@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import adapter from '../src/index.mjs';
@@ -96,6 +96,9 @@ test('agent remains open after delivery; main agent can finish only when complet
   await h.events.session_start({}, h.ctx);
   const batch = await h.boundary();
   assert.match(batch.entries[0].content, /rex_finish/);
+  assert.match(batch.entries[0].content, /promptly call rex_finish/);
+  assert.match(batch.entries[0].content, /Closing retains its files, result, and session records/);
+  assert.match(batch.entries[0].content, /unless you need another turn/);
   h.entries.push(...batch.entries); await h.boundary();
   assert.equal(h.calls.length, 0);
   const finish = () => h.tools.rex_finish.execute('x', { id: run.id }, undefined, undefined, h.ctx);
@@ -106,6 +109,73 @@ test('agent remains open after delivery; main agent can finish only when complet
   await finish(); assert.equal(h.calls.length, 1);
   const row = (await h.tools.rex_tasks.execute('x', {}, undefined, undefined, h.ctx)).details[0];
   assert.equal(row.taskState, 'completed'); assert.equal(row.blockState, 'closed');
+});
+
+for (const language of ['en', 'zh']) test(`agent overlay uses durable latest-turn receipts, survives reload and keeps lifecycle unchanged (${language})`, async t => {
+  const h = await fixture(t), run = await task(h.root, 'agent');
+  await mkdir(join(h.dir, '.pi'));
+  await atomicJson(join(h.dir, '.pi', 'rex.json'), { language });
+  const report = { text: 'same answer', status: 'completed', sequence: 1, createdAt: '2026-01-01T00:00:00.001Z' };
+  await atomicJson(join(run.dir, 'result.json'), report);
+  await atomicJson(join(run.dir, 'turn-first.json'), report);
+  await h.events.session_start({}, h.ctx);
+  const pending = language === 'en' ? /Completed · awaiting delivery/ : /已完成 · 待回传/;
+  const delivered = language === 'en' ? /Delivered · awaiting close/ : /已回传 · 待关闭/;
+  async function screen(scripts = [['cancel']]) {
+    const screens = [];
+    driveOverlays(h.ctx, scripts.map(keys => component => {
+      screens.push(component.render(100).join('\n'));
+      for (const key of keys) component.handleInput(`tui.select.${key}`);
+    }));
+    await h.commands['rex-tasks'].handler('', h.ctx);
+    return screens.join('\n');
+  }
+  assert.match(await screen(), pending);
+  const batch = h.boundary(); // Queued at a boundary, but not persisted yet.
+  assert.match(await screen(), pending);
+  assert.equal(h.calls.length, 0);
+  h.entries.push(...batch.entries);
+  const received = await screen([['down', 'confirm'], ['confirm'], ['cancel'], ['cancel'], ['cancel']]);
+  assert.match(received, delivered);
+  assert.match(received, language === 'en' ? /review is not confirmed/ : /不代表已审核/);
+  assert.doesNotMatch(received, pending);
+  await h.events.session_start({}, h.ctx);
+  assert.match(await screen(), delivered);
+
+  // Same answer on a new turn is still a new delivery, including the brief
+  // interval between writing result.json and publishing its turn file.
+  const next = { ...report, sequence: 2, createdAt: '2026-01-01T00:00:00.002Z' };
+  await atomicJson(join(run.dir, 'result.json'), next);
+  assert.match(await screen(), pending);
+  await atomicJson(join(run.dir, 'turn-second.json'), next);
+  assert.match(await screen(), pending);
+  h.entries.push({ type: 'custom_message', customType: 'rex_result', details: { receipts: [`${run.id}/turn-second.json`] } });
+  assert.match(await screen(), delivered);
+  assert.equal(h.calls.length, 0); assert.equal(h.messages.length, 0);
+  assert.equal(h.widgets.at(-1)?.[1], undefined); // Completed tasks stay off the main overview.
+
+  await atomicJson(join(run.dir, 'activity.json'), { task: 'running', process: 'running' });
+  const running = await screen();
+  assert.doesNotMatch(running, pending); assert.doesNotMatch(running, delivered);
+  await atomicJson(join(run.dir, 'activity.json'), { task: 'completed', process: 'idle' });
+  assert.equal((await h.tools.rex_finish.execute('finish', { id: run.id }, undefined, undefined, h.ctx)).isError, undefined);
+  const closed = await screen();
+  assert.match(closed, language === 'en' ? /Closed/ : /已关闭/);
+  assert.doesNotMatch(closed, pending); assert.doesNotMatch(closed, delivered);
+  assert.equal(h.calls.length, 1);
+});
+
+test('BTW and failed tasks never acquire a delivery/close label', async t => {
+  const h = await fixture(t);
+  const btw = await task(h.root, 'btw'), failed = await task(h.root, 'agent', 'failed');
+  for (const run of [btw, failed]) h.entries.push({ type: 'custom_message', customType: 'rex_result', details: { receipt: `${run.id}/result.json` } });
+  await h.events.session_start({}, h.ctx);
+  let screen;
+  driveOverlays(h.ctx, [component => { screen = component.render(100).join('\n'); component.handleInput('tui.select.cancel'); }]);
+  await h.commands['rex-tasks'].handler('', h.ctx);
+  assert.match(screen, /BTW/); assert.match(screen, /Failed/);
+  assert.doesNotMatch(screen, /awaiting delivery|awaiting close/);
+  assert.equal(h.calls.length, 0);
 });
 
 test('finish rejects BTW and failed subagents', async t => {

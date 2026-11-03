@@ -30,7 +30,9 @@ const kinds = { agent: 'Agent', shell: 'Shell', btw: 'BTW' };
 export function rowLabel(row, language = 'en') {
   const process = row.closed ? t(language, 'closed') : row.processState === 'idle' ? t(language, 'idle')
     : row.processState === 'exited' ? t(language, 'processExited') : row.processState === 'unknown' ? t(language, 'processUnknown') : '';
-  return `[${kinds[row.kind] || row.kind}] ${plain(row.name)} · ${t(language, row.taskState)}${process ? ` / ${process}` : ''}${row.cleanupError ? ` · ${t(language, 'cleanupFailed')}` : ''}`;
+  const delivery = row.kind === 'agent' && row.taskState === 'completed' && !row.closed && row.deliveryState
+    ? t(language, `delivery_${row.deliveryState}`) : undefined;
+  return `[${kinds[row.kind] || row.kind}] ${delivery ? fit(row.name, 28) : plain(row.name)} · ${delivery || `${t(language, row.taskState)}${process ? ` / ${process}` : ''}`}${row.cleanupError ? ` · ${t(language, 'cleanupFailed')}` : ''}`;
 }
 function rank(row) {
   if (row.closed) return 3;
