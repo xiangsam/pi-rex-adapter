@@ -387,6 +387,13 @@ test('runner termination reaches shell descendants in its isolated process group
   const pid = Number(await readFile(join(h.dir, 'descendant.pid'), 'utf8'));
   t.after(() => { try { process.kill(pid, 'SIGKILL'); } catch {} });
   h.child.kill('SIGTERM'); await h.closed;
-  await until(() => { try { process.kill(pid, 0); return false; } catch (e) { return e.code === 'ESRCH'; } });
+  await until(async () => {
+    try { process.kill(pid, 0); } catch (e) { return e.code === 'ESRCH'; }
+    if (process.platform !== 'linux') return false;
+    // A terminated orphan can remain as a zombie until the host reaps it.
+    // kill(pid, 0) succeeds in that state; it does not mean sleep is still running.
+    try { return /^State:\s+Z\b/m.test(await readFile(`/proc/${pid}/status`, 'utf8')); }
+    catch (e) { if (e.code === 'ENOENT') return true; throw e; }
+  });
   assert.match((await readJson(join(h.run.dir, 'exit.json'))).error, /SIGTERM/);
 });
