@@ -13,7 +13,7 @@
 
 保留 Pi 原生交互，尊重用户调整过的布局。没有待监控任务时不常驻监听；配置只有界面语言和每 tab 的 pane 上限。
 
-目标环境是 **Pi 1.4+、Node 22.19+**，Rex CLI 需要支持 `window new/split --json --shell=none --focus=false` 与 `block inspect --json`。
+目标环境是 **Pi 1.4+、Node 22.19+**，Rex CLI 需要支持 `window new/split --json --shell=none --focus=false` 、`block inspect --json`、`block call … process`（包含 `last_exit`）和 `events -s … --json`（终端退出与 block 关闭事件）。
 
 ## 安装
 
@@ -145,18 +145,26 @@ BTW 回传是可选操作：普通回答结束后提示“答案已就绪 · 可
 控制工具返回的任务状态与 `rex_tasks` 使用相同的推导规则。成功关闭或核实资源已移除时，会将该结果保存到 `run.json`；重复关闭也会修正旧的已关闭记录中的过期状态。任务未关闭时，`run.json` 是生命周期记录，并非实时状态源；应通过 `rex_tasks` 合并 activity、result、exit 记录查询。不会新增后台迁移来批量重写历史记录。
 
 ```text
-父 Pi → 写入任务记录 → Rex block → runner → Pi / shell
-  ↑                                         ↓
-  └── rex_result 批量接收 ← 完成文件 / 主动回传文件
+父 Pi → 任务记录 → Rex block → Pi（Agent / BTW）
+  │                       └→ shell runner → shell
+  ↑
+  └── 批量回报 ← 完成文件 / 可选主动回传文件
+      进程退出 ← Rex 事件 / 恢复时核对
 ```
 
 借鉴 [pi-herdr-agents](https://github.com/giuseppecrj/pi-herdr-agents) 的独立子进程、非阻塞委派、结果回传，以及 [pi-background-tasks](https://github.com/SakikoTogawa233/pi-background-tasks) 的持久任务登记和完成通知；Rex 负责 session/window/block 布局与进程。实现为独立包，未复制上述项目源码，也不是两者全部功能的移植。
+
+Agent 和 BTW 由 Rex 直接启动 Pi：短暂的 `env` 设置任务目录与 PATH 后替换为 Pi，不再常驻一层 adapter Node supervisor。终端标题与原生 `app=pi` 状态由 Pi 自己管理。Shell 保留 runner，负责完整日志、终端输出、背压和进程组取消；它以 `app=shell` 上报身份，不再被识别成 Pi。已启动的旧子进程保持原架构，关闭后重新创建才使用新路径。
+
+存在直接启动的 Pi pane 时，父扩展为每个 Rex session 保留一条事件订阅，将终端退出写入 `exit.json`，并跟踪 block 关闭。首次订阅、新增任务及断线重连时核对 `process.last_exit`，同一 session 的恢复查询串行执行；正常运行不循环查询进程，也不阻塞主 agent 的回合边界。父会话 reload/退出时释放订阅，保留子进程；断线重连采用有上限的退避。
+
+若父会话离线期间直接启动的 Pi block 已消失，Rex 无法再提供退出码，会记录 `closed`、`exit.unknown=true` 与原因。已完成且空闲时保存的回报继续保留；未完成任务记为 `exited`，不伪造成功，也不一直显示运行中。仍保留的 block 正常恢复已知退出码。BTW 的退出只更新历史，结论仍需通过 `/btw-return` 主动回传。
 
 父扩展监听结果文件，先存入本地 inbox，不为每条结果单独排一个 `followUp`。主线工作时在 `turn_end`（本次模型响应及工具执行结束）或 `agent_before_settle` 将全部就绪结果合成一条 custom message，并请求一次 continuation；不用等整个任务空闲。主线空闲时用 300ms 合并窗口收集结果，再触发一次新 turn。模型正在输出或工具正在执行时不强行插入消息；尚未完成的任务也不会阻止已有结果送达。用户中止主线后不会因待收结果立即自动重启；下一次用户启动主线时再接收。agent 无需运行状态轮询。有待监控任务时，内部每 5 秒做一次文件对账，以补偿丢失的文件事件。回合边界只消费已经收集的结果，不等待扫描结束。多轮回报记录时间/顺序，恢复后按顺序批量送达；旧版无顺序字段的结果以文件修改时间兼容排序。任务目录位于父 Pi session directory 的 `rex-adapter/<parent-session-id>/<task-id>/`，私有权限保存任务正文、上下文、session、日志和退出记录。
 
 `/reload` 或恢复相同父 session 会重新发现完成结果，通过已持久化消息中的 receipts 去重（兼容旧版单 receipt）。切换到另一 session 后不会把旧任务结果投递给新主线；返回原 session 时补发。退出父 Pi 不会主动关闭 Rex block，但父进程离线时不会触发模型，重新打开原 session 后才能补发。工具取消信号传递到排队后的检查、资源操作与 CLI 子进程；创建请求尚未发出时取消不会开新 block。请求已经发出后被取消、超时或返回格式异常，记录标记为 `uncertain`，不自动重试，以免重复执行。
 
-Shell block 在结果确认送达后自动清理；子 agent 由主 agent 通过 `rex_finish` 收尾，BTW 默认保留。也可通过 `/rex-tasks` 中的任务操作 显式关闭。重复或并发关闭同一任务幂等。关闭前已完成的任务保留原状态；关闭导致的进程退出归为 cancelled，通知仍保留信号/启动失败原因。任务记录与日志不自动删除，长驻任务日志会持续增长。若 runner 被 SIGKILL、Rex 崩溃或主机断电而未写出退出记录，状态可能停留在 running/uncertain，需要检查 block；不将缺失记录误判为成功。通知对普通 reload 可去重，进程崩溃与队列持久化的极小窗口内不保证事务式 exactly-once。Shell 在 POSIX 下使用独立进程组，runner 收到终止信号时转发给该组，2 秒后仍未结束则升级终止；主动脱离该组的进程不在此保证内。
+Shell block 在结果确认送达后自动清理；子 agent 由主 agent 通过 `rex_finish` 收尾，BTW 默认保留。也可通过 `/rex-tasks` 中的任务操作 显式关闭。重复或并发关闭同一任务幂等。关闭前已完成的任务保留原状态；关闭导致的进程退出归为 cancelled，通知仍保留信号/启动失败原因。任务记录与日志不自动删除，长驻任务日志会持续增长。对于 Shell 和旧版 runner 任务，若 runner 被 SIGKILL、Rex 崩溃或主机断电而未写出退出记录，状态可能停留在 running/uncertain，需要检查 block；不将缺失记录误判为成功。通知对普通 reload 可去重，进程崩溃与队列持久化的极小窗口内不保证事务式 exactly-once。Shell 在 POSIX 下使用独立进程组，runner 收到终止信号时转发给该组，2 秒后仍未结束则升级终止；主动脱离该组的进程不在此保证内。
 
 子进程使用 Rex 环境和父进程的 PATH，不复制主 Pi 的全部环境变量或临时凭证；模型认证应能由子 Pi 的正常配置加载。命令、子 agent 与项目扩展均以当前用户权限运行。
 
@@ -196,7 +204,7 @@ npm run check
 npm pack --dry-run
 ```
 
-自动化覆盖 Rex 参数契约、上下文裁剪、交互式 Pi 参数、真实 shell 成功/失败路径、Pi 启动失败、批量通知与 reload 去重、BTW 显式回传、控制所有权、并发/重复 close 与取消退出竞态、失败原因展示、左右分组与溢出、BTW 并发复用和输入去重、手动移动保留、独立任务/进程/block 状态、概览与隐藏恢复、送达后 shell 自动清理、主 agent 安全收尾、关闭竞态和页码回收。另覆盖取消排队/已发出创建、慢清理与主线隔离、冷历史不再读取、异步拒收后的输入恢复、多轮顺序、人工核实恢复、浮层返回位置、慢终端背压、日志写入失败以及 shell 进程组终止。配置测试覆盖默认英文、全局/项目覆盖、错误配置回退、主看板与浮层语言切换、子会话继承父项目配置，以及 pane 上限与 reload 后保留已有布局。已用本机 Pi 1.4.0 的真实扩展 loader 验证注册。
+自动化覆盖 Rex 参数契约、上下文裁剪、交互式 Pi 参数、真实 shell 成功/失败路径、Pi 启动失败、批量通知与 reload 去重、BTW 显式回传、控制所有权、并发/重复 close 与取消退出竞态、失败原因展示、左右分组与溢出、BTW 并发复用和输入去重、手动移动保留、独立任务/进程/block 状态、概览与隐藏恢复、送达后 shell 自动清理、主 agent 安全收尾、关闭竞态和页码回收。另覆盖取消排队/已发出创建、慢清理与主线隔离、冷历史不再读取、异步拒收后的输入恢复、多轮顺序、人工核实恢复、浮层返回位置、慢终端背压、日志写入失败以及 shell 进程组终止。配置测试覆盖默认英文、全局/项目覆盖、错误配置回退、主看板与浮层语言切换、子会话继承父项目配置，以及 pane 上限与 reload 后保留已有布局。已用本机 Pi 1.4.0 的真实扩展 loader 验证注册。新增测试覆盖直接启动参数、事件订阅释放、退出/关闭、断线恢复、未知退出原因、旧结果不冒充新回合成功和回报去重；独立真实 Rex session 验证中英文 Pi 启动、原生 Pi 身份、启动失败以及父会话离线后的退出和缺失 pane 恢复。
 
 本次开发环境禁止连接 Rex 本地 socket，因此尚未完成真实 Rex 布局/关闭进程的端到端验证。在 Rex 中安装后建议验收：
 
@@ -229,9 +237,9 @@ Rex session 表达工作的归属，window/tab 表达注意力分组，pane 表�
 - 同一个父会话的布局创建与关闭串行执行，避免并发创建重复 BTW 或超出容量。分组依据磁盘任务记录恢复，`/reload` 后仍可复用。
 - 结果送达前保留输出的 shell block 仍占一个位置；送达后自动关闭，或在任务浮层显式关闭后，可以复用剩余 pane 所在的 tab。新页码只参考未关闭记录，已关闭的高页码不会继续抬高序号。空 tab 不主动删除，以免影响用户添加的内容，因此编号复用时旧空 tab 的标题可能与新 tab 相同。
 - 用户移动过的 block 保留原位置，不被搬回；移动不改变父子关系、结果接收方和控制权限。新任务不会以已移出的 block 为分屏锚点。手动添加的非本扩展 pane 不计入上述 pane 上限，也不会自动重排。
-- 选择布局或复用 BTW 时，若 Rex 明确返回登记的 block 不存在，且任务已有有效进程退出记录，自动将残留记录标为已关闭并继续创建；结果和日志保留，已消失的页不再推进新 tab 页码。仅在创建/复用时处理，不增加轮询。连接失败、session 不存在、缺少退出记录或创建结果不确定时仍停止新建；人工核实资源不存在且进程已停止后，可通过 `/rex-tasks` 的恢复操作修复记录。
+- 选择布局或复用 BTW 时，若 Rex 明确返回直接启动的 Pi block 不存在，自动将记录标为关闭并继续创建；没有退出码时明确标注进程退出原因未知，保留已有回答。旧版 runner 任务仍需有效退出记录才能自动回收。结果和日志保留，已消失的页不再推进新 tab 页码。连接失败、session 不存在或创建结果不确定时仍停止新建；人工核实资源已停止且不存在后，可通过任务面板的恢复操作修复记录。
 
-模型工具 `rex_tasks` 返回 `taskState`、`processState`、`blockState`：例如 agent 回答后可以是 `completed / idle / open`，后台命令结束后可以是 `completed / exited / open`。前两者来自子进程最后报告和退出记录；`blockState` 来自此次 Rex 检查，无法验证时为 `unverified` 并显示原因；已经确认关闭的记录强制为 `closed`，即使检查期间刚好发生关闭也不会返回旧的 open。进程被强杀但没有退出记录时，最后报告可能过期。`resultAvailable` 标识是否存在 `result.json`；只有退出记录时仍展示退出原因/取消状态，并可在任务浮层选择“查看日志”读取保留日志，不伪造正常结果。底部状态行仅显示活跃的 Agent / Shell 数量，无活跃任务时清空；BTW 和已结束任务仍可在面板中查看。
+模型工具 `rex_tasks` 返回 `taskState`、`processState`、`blockState`：例如 agent 回答后可以是 `completed / idle / open`，后台命令结束后可以是 `completed / exited / open`。前两者来自子进程最后报告和退出记录；`blockState` 来自此次 Rex 检查，无法验证时为 `unverified` 并显示原因；已经确认关闭的记录强制为 `closed`，即使检查期间刚好发生关闭也不会返回旧的 open。Rex 不可达或旧版 runner 没有退出记录时，最后报告可能过期；不会将连接错误当作 block 已关闭。`resultAvailable` 标识是否存在 `result.json`；只有退出记录时仍展示退出原因/取消状态，并可在任务浮层选择“查看日志”读取保留日志，不伪造正常结果。底部状态行仅显示活跃的 Agent / Shell 数量，无活跃任务时清空；BTW 和已结束任务仍可在面板中查看。
 
 旧版本已经打开的 Agents/Jobs tab 不自动迁移，新的分组规则作用于新任务。旧 BTW 需要在侧聊中 `/reload` 后才能接收复用问题，或关闭后重建。尚不支持同一父 Pi session 被多个独立主进程同时操控；串行锁覆盖当前 Pi 进程及其 reload。
 

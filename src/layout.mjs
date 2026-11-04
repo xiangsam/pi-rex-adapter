@@ -3,15 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { atomicJson, listRuns, readJson, runStatus } from './core.mjs';
 import { DEFAULT_CONFIG } from './config.mjs';
 
-// Survives extension reload in the same Pi process. Only layout mutations for
-// the same parent are serialized; the launched processes remain independent.
-const locks = globalThis[Symbol.for('pi-rex-adapter.layout-locks')] ??= new Map();
-export async function withLayoutLock(root, work) {
-  const previous = locks.get(root) || Promise.resolve();
-  const next = previous.catch(() => {}).then(work);
-  locks.set(root, next);
-  try { return await next; } finally { if (locks.get(root) === next) locks.delete(root); }
-}
+export { withLayoutLock } from './core.mjs';
+import { missingBlock, recordLifecycle } from './lifecycle.mjs';
 
 // Called under the parent's layout lock, only while choosing/reusing a pane.
 // Keep ambiguous failures blocking; an exited process plus an explicitly absent
@@ -21,6 +14,10 @@ async function inspectOrRetire(client, run, signal) {
   catch (error) {
     signal?.throwIfAborted();
     if (error.code !== 'REX_BLOCK_NOT_FOUND' || error.block !== run.block || error.rexSession !== run.rexSession) throw error;
+    if (run.runtime === 'direct-pi' && missingBlock(error, run)) {
+      await recordLifecycle(run, { closed: true }, signal);
+      return undefined;
+    }
     const [latest, exit, result] = await Promise.all(['run', 'exit', 'result'].map(name => readJson(join(run.dir, `${name}.json`))));
     signal?.throwIfAborted();
     if (!latest || latest.id !== run.id || latest.block !== run.block || latest.rexSession !== run.rexSession ||

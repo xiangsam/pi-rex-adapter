@@ -10,7 +10,7 @@ test('shell display shows the complete multiline command and native working stat
   assert.match(visible, /Shell · Build\nWorking directory: \/tmp\/a b/);
   assert.ok(visible.includes(task.split('\n').map((s, i) => `${i ? '> ' : '$ '}${s}`).join('\n')));
   assert.match(output, /\x1b\]2;Shell · Build\x1b\\/);
-  assert.match(output, /7501;id=rex-shell:state=working/);
+  assert.match(output, /7501;id=rex-shell:state=working:app=shell:/);
   const status = output.match(/\x1b\]7501;[^\x1b]+\x1b\\/)[0];
   assert.ok(Buffer.byteLength(status) < 4096);
 });
@@ -34,4 +34,8 @@ test('shell endings expose completion, error, interruption and silence in the se
   const cancelled = shellEnd(run, { code: null, signal: 'SIGTERM', elapsedMs: 100, hasOutput: true });
   assert.match(cancelled, /state=idle/);
   assert.match(stripVTControlCharacters(cancelled), /Interrupted · exit=SIGTERM/);
+  for (const output of [done, failed, cancelled]) {
+    assert.match(output, /:app=shell:/);
+    assert.doesNotMatch(output, /:app=pi/);
+  }
 });

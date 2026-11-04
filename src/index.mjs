@@ -7,6 +7,7 @@ import { Rex, rexExecutable, atomicJson, readJson, listRuns, prepareRun,
 
 import { withLayoutLock, existingBtw, choosePlacement } from './layout.mjs';
 import { registerChild } from './child.mjs';
+import { directRun, observeLifecycles } from './lifecycle.mjs';
 import { createDialogs } from './dialog.mjs';
 import { DEFAULT_CONFIG, loadConfig } from './config.mjs';
 import { t } from './i18n.mjs';
@@ -39,10 +40,34 @@ export default function adapter(pi, dependencies = {}) {
   const toolDefinitions = new Map();
   let controlsDirect = false;
   let rexPromise;
+  let lifecycle, lifecycleStarting;
   const rex = () => dependencies.rex ? Promise.resolve(dependencies.rex) : (rexPromise ??= rexExecutable().then(binary => new Rex(binary)));
   const seen = ctx => new Set(ctx.sessionManager.getEntries()
     .filter(e => e.type === 'custom_message' && e.customType === 'rex_result')
     .flatMap(e => e.details?.receipts || [e.details?.receipt]));
+
+  function monitorProcesses(runs) {
+    const direct = runs.filter(directRun);
+    if (lifecycle) { lifecycle.update(direct); return; }
+    if (!direct.length || lifecycleStarting) return;
+    const epoch = generation, signal = lifetime.signal, runRoot = root;
+    const start = rex().then(client => {
+      if (epoch !== generation || signal.aborted) return;
+      lifecycle = observeLifecycles({ client, root: runRoot, signal,
+        onChange: () => { if (epoch === generation) void reconcile(); },
+        onError: error => {
+          if (epoch === generation && current?.hasUI) {
+            current.ui.setStatus('rex', `Rex: ${error.message}`);
+            statusText = `Rex: ${error.message}`;
+          }
+        },
+      });
+      lifecycle.update(direct);
+    }).catch(error => {
+      if (epoch === generation && current?.hasUI) current.ui.setStatus('rex', `Rex: ${error.message}`);
+    }).finally(() => { if (lifecycleStarting === start) lifecycleStarting = undefined; });
+    lifecycleStarting = start;
+  }
 
   function takeBatch(ctx) {
     if (!inbox.size && !pending.size) return;
@@ -140,12 +165,13 @@ export default function adapter(pi, dependencies = {}) {
     try {
       const delivered = seen(ctx);
       for (const receipt of delivered) { pending.delete(receipt); inbox.delete(receipt); }
-      const rows = [];
+      const rows = [], processRuns = [];
       runs: for (const [id, dir] of tracked) {
         if (epoch !== generation) return;
         if (closing.has(id)) continue;
         const run = await readJson(join(dir, 'run.json'));
         if (!run) continue;
+        processRuns.push(run);
         const [exit, activity, latestResult, files] = await Promise.all([
           readJson(join(dir, 'exit.json')), readJson(join(dir, 'activity.json')),
           readJson(join(dir, 'result.json')), readdir(dir),
@@ -156,7 +182,7 @@ export default function adapter(pi, dependencies = {}) {
         if (run.kind === 'btw') receipts = files.filter(n => /^return-.*\.json$/.test(n));
         else if (run.kind === 'agent' && run.interactive) {
           receipts = files.filter(n => /^turn-.*\.json$/.test(n));
-          if ((exit && exit.code !== 0 && !run.taskCompletedBeforeClose) || run.status === 'cancelled') receipts.push('exit.json');
+          if ((exit && (exit.code !== 0 || exit.taskIncomplete || !latestResult) && !run.taskCompletedBeforeClose) || run.status === 'cancelled') receipts.push('exit.json');
         } else receipts = exit || run.status === 'cancelled' ? ['result.json'] : [];
         for (const file of receipts) {
           const receipt = `${id}/${file}`;
@@ -185,7 +211,7 @@ export default function adapter(pi, dependencies = {}) {
         }
       }
       if (epoch === generation) {
-        overviewRows = rows; updateUI(); monitor(); scheduleWake(); cleanBlocks();
+        overviewRows = rows; updateUI(); monitor(); monitorProcesses(processRuns); scheduleWake(); cleanBlocks();
       }
     } catch (e) {
       if (epoch === generation && ctx.hasUI && statusText !== `Rex: ${e.message}`) {
@@ -239,6 +265,7 @@ export default function adapter(pi, dependencies = {}) {
     if (current?.hasUI && statusText) current.ui.setStatus('rex', undefined);
     overviewRows = []; uiKey = 'empty'; statusText = undefined;
     generation++; lifetime.abort(); lifetime = new AbortController();
+    lifecycle?.stop(); lifecycle = undefined; lifecycleStarting = undefined;
     clearInterval(timer); clearTimeout(debounce); clearTimeout(wakeTimer); wakeTimer = undefined; watcher?.close();
     watcher = undefined; timer = undefined; scanning = undefined; cleanupWorker = undefined;
     current = undefined; pending.clear(); inbox.clear(); tracked.clear(); cleanup.clear(); cleanupErrors.clear();
@@ -288,6 +315,7 @@ export default function adapter(pi, dependencies = {}) {
       if (!task) throw new Error('Task must not be empty; use /btw <question> to start a side conversation.');
       const options = {
         owner: ctx.sessionManager.getSessionId(), kind, name, task, cwd: resolve(ctx.cwd, params.cwd || '.'),
+        runtime: kind === 'shell' ? 'shell-runner' : 'direct-pi',
         rexSession: process.env.REX_SESSION, anchor: process.env.REX_BLOCK,
         piBin: process.env.PI_REX_PI_BIN || process.argv[1] || 'pi',
         path: process.env.PATH,

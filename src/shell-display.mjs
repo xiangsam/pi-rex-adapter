@@ -16,7 +16,7 @@ const blue = text => `\x1b[38;2;126;152;173m${text}\x1b[0m`;
 function report(run, state, message) {
   const title = Buffer.from(line(run.name || 'Shell')).toString('base64');
   const msg = Buffer.from(line(message, 1800)).toString('base64');
-  return `\x1b]7501;id=rex-shell:state=${state}:app=pi-rex-adapter:title=${title}:msg=${msg}\x1b\\`;
+  return `\x1b]7501;id=rex-shell:state=${state}:app=shell:title=${title}:msg=${msg}\x1b\\`;
 }
 export function shellStart(run, language = 'en') {
   const title = `Shell · ${line(run.name || run.task)}`;

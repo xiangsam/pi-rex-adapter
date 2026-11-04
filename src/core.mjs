@@ -1,4 +1,6 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
+import { fileURLToPath } from 'node:url';
 import { access, mkdir, readFile, rename, writeFile, readdir, open } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { join } from 'node:path';
@@ -55,7 +57,7 @@ export class Rex {
     args.push('-s', manifest.rexSession, '-c', manifest.cwd);
     if (split || !layout) args.push('--label', manifest.name);
     args.push('--focus=false', '--keep-open', '--shell=none', '--json', '--',
-      process.execPath, runner, manifest.dir);
+      ...(manifest.runtime === 'direct-pi' ? directPiCommand(manifest) : [process.execPath, runner, manifest.dir]));
     const result = await this.json(args, signal);
     if (!Array.isArray(result.block_ids) || typeof result.block_ids[0] !== 'string') {
       throw new Error('Rex returned no block ID; inspect Rex before retrying.');
@@ -67,8 +69,12 @@ export class Rex {
     return result.block_ids[0];
   }
   async inspect(manifest, signal) {
-    let result;
-    try { result = await this.json(['block', 'inspect', manifest.block, '-s', manifest.rexSession, '--json'], signal); }
+    const result = await this.blockJson(manifest, ['block', 'inspect', manifest.block, '-s', manifest.rexSession, '--json'], signal);
+    if (typeof result.block?.window_id !== 'string') throw new Error('Rex inspection did not identify the block window. No layout changes made.');
+    return { window: result.block.window_id };
+  }
+  async blockJson(manifest, args, signal) {
+    try { return await this.json(args, signal); }
     catch (error) {
       // Classify only Rex's exact missing-target response for the requested
       // block. Transport errors and a missing session are not proof of removal.
@@ -78,8 +84,30 @@ export class Rex {
       }
       throw error;
     }
-    if (typeof result.block?.window_id !== 'string') throw new Error('Rex inspection did not identify the block window. No layout changes made.');
-    return { window: result.block.window_id };
+  }
+  process(manifest, signal) {
+    return this.blockJson(manifest, ['block', 'call', '-s', manifest.rexSession, '-b', manifest.block, 'process'], signal);
+  }
+  events(session, { onEvent, onReady, onDisconnect }) {
+    const child = spawn(this.binary, ['events', '-s', session, '--json'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const lines = createInterface({ input: child.stdout });
+    let stopped = false, ready = false, errorText = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', text => { errorText = (errorText + text).slice(-2000); });
+    lines.on('line', line => {
+      if (stopped) return;
+      let event;
+      try { event = JSON.parse(line); } catch { return; }
+      if (event.type !== 'session_event' || event.payload?.session_id !== session) return;
+      if (!ready) { ready = true; onReady(); }
+      onEvent(event.payload.event);
+    });
+    child.on('error', error => { errorText = error.message; });
+    child.on('close', () => {
+      lines.close();
+      if (!stopped) onDisconnect(new Error(errorText.trim() || 'Rex event stream disconnected'));
+    });
+    return () => { stopped = true; lines.close(); child.kill(); };
   }
   async control(manifest, action, signal) {
     signal?.throwIfAborted();
@@ -143,11 +171,21 @@ export function piArgs(run, extension) {
   return args;
 }
 
+// env replaces itself with Pi; no adapter supervisor remains in the PTY.
+export function directPiCommand(run) {
+  const binary = run.piBin || 'pi';
+  return ['/usr/bin/env', `PI_REX_RUN_DIR=${run.dir}`, ...(run.path ? [`PATH=${run.path}`] : []),
+    ...(/\.[cm]?js$/.test(binary) ? [process.execPath, binary] : [binary]),
+    ...piArgs(run, fileURLToPath(new URL('./index.mjs', import.meta.url)))];
+}
+
 // A user close wins over the signal exit caused by that close. Preserve jobs
 // which had already finished before close was requested.
 export function runStatus(run, exit, result) {
   if (run.taskCompletedBeforeClose) return result?.status || 'completed';
   if (run.status === 'cancelled' || (run.closed && run.completedBeforeClose !== true && exit?.code !== 0)) return 'cancelled';
+  if (exit?.unknown) return 'exited';
+  if (exit?.taskIncomplete && exit.code === 0) return 'exited';
   if (exit) return exit.code !== 0 ? 'failed' : result?.status || 'exited';
   return result?.status || run.status;
 }
@@ -159,3 +197,14 @@ export function runStates(run, exit, result, activity) {
   return { taskState: task, processState: process,
     blockState: run.closed ? 'closed' : 'unverified', activityAt: activity?.at };
 }
+
+// Survives extension reload in the same Pi process. Only layout mutations for
+// the same parent are serialized; the launched processes remain independent.
+const locks = globalThis[Symbol.for('pi-rex-adapter.layout-locks')] ??= new Map();
+export async function withLayoutLock(root, work) {
+  const previous = locks.get(root) || Promise.resolve();
+  const next = previous.catch(() => {}).then(work);
+  locks.set(root, next);
+  try { return await next; } finally { if (locks.get(root) === next) locks.delete(root); }
+}
+

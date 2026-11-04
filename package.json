@@ -1,6 +1,6 @@
 {
   "name": "pi-rex-adapter",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Parallel Pi agents, side conversations, and background jobs in Rex — with automatic result delivery and a compact task overview.",
   "type": "module",
   "engines": {
@@ -26,7 +26,7 @@
   },
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "check": "node --check src/index.mjs && node --check src/core.mjs && node --check src/runner.mjs && node --check src/shell-display.mjs && node --check src/layout.mjs && node --check src/child.mjs && node --check src/overview.mjs && node --check src/dialog.mjs && node --check src/config.mjs && node --check src/i18n.mjs",
+    "check": "node --check src/index.mjs && node --check src/core.mjs && node --check src/lifecycle.mjs && node --check src/runner.mjs && node --check src/shell-display.mjs && node --check src/layout.mjs && node --check src/child.mjs && node --check src/overview.mjs && node --check src/dialog.mjs && node --check src/config.mjs && node --check src/i18n.mjs",
     "prepublishOnly": "npm run check && npm test"
   },
   "repository": {

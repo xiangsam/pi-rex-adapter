@@ -8,7 +8,8 @@ import { atomicJson, readJson, piArgs } from './core.mjs';
 import { loadConfig } from './config.mjs';
 import { shellStart, shellEnd } from './shell-display.mjs';
 
-// This wrapper runs in the Rex block, not in the parent Pi process.
+// New launches use this supervisor only for shell jobs. Keep the Pi branch for
+// legacy manifests; new Agent/BTW panes exec Pi directly from Rex.
 const dir = process.argv[2];
 const run = await readJson(join(dir, 'run.json'));
 const extension = fileURLToPath(new URL('./index.mjs', import.meta.url));

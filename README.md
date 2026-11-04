@@ -15,7 +15,7 @@ Built to stay out of the way: native Pi tools remain available, user-adjusted la
 
 ## Installation
 
-Requires **Pi 1.4+**, **Node.js 22.19+**, and Rex with support for `window new/split --json --shell=none --focus=false` and `block inspect --json`.
+Requires **Pi 1.4+**, **Node.js 22.19+**, and Rex with support for `window new/split --json --shell=none --focus=false` `block inspect --json`, `block call … process` (including `last_exit`), and `events -s … --json` (terminal exits and block closure).
 
 Run inside a Rex terminal:
 
@@ -131,7 +131,7 @@ If no name is supplied, the task's first line becomes a short, readable name.
 
 The pane immediately shows the task name, working directory, and complete submitted command, including multiline commands. Live output follows; when the command exits, a short summary shows its outcome, exit code or signal, and elapsed time. A silent command is explicitly marked as producing no output. Headings use muted blue and follow the configured UI language. These display lines are separate from `output.log` and the result sent to the parent.
 
-The runner sets a terminal title and reports working/done/error states through [Rex's program status protocol](https://www.superlogical.com/rex/docs/build/program-status), so Rex can display the task state without polling. Cancellation reports idle. Output remains available in Rex's scrollback while the pane is open; closing after result delivery follows the same policy as before.
+The shell runner identifies itself as `app=shell` (not Pi), sets a terminal title, and reports working/done/error states through [Rex's program status protocol](https://www.superlogical.com/rex/docs/build/program-status), so Rex can display the task state without polling. Cancellation reports idle. Output remains available in Rex's scrollback while the pane is open; closing after result delivery follows the same policy as before.
 
 Shell output is still captured through pipes to preserve full logs and process-group cancellation. Python receives `PYTHONUNBUFFERED=1` by default so ordinary `print()` output appears promptly; an existing value is preserved. Other programs may need their own flush/progress options when stdout is not a TTY. Output redirected by the command to another file is not automatically tailed.
 
@@ -198,7 +198,7 @@ Current Rex session (selected by the user)
 - Shell blocks retained for undelivered results still occupy a slot. After delivery and cleanup, the remaining tab can accept another task. Only open records advance page numbers.
 - Empty tabs are not deleted automatically because users may have added content. Reused page numbers can therefore produce the same title as an older empty tab.
 - Blocks moved by the user stay where they are. A moved block is not reused as a split anchor outside its original managed window. Moving it does not change ownership, result delivery, or control permissions. Manually added panes do not count toward the configured limit and are not rearranged.
-- When selecting a layout or reusing BTW, an exact Rex response that the recorded block is missing, together with a valid process exit record, automatically marks the stale task closed and continues creation. Results and logs are retained, and removed pages do not advance the next tab number. This runs only on a launch/reuse attempt, without additional polling. Connection failures, missing sessions, missing exit records, and uncertain creations still stop creation in that group; manually verified removal can be recorded through the task manager's recovery action.
+- When selecting a layout or reusing BTW, an exact Rex response that a direct Pi block is missing marks the task closed and allows creation to continue. If no exit code remains, the process outcome is explicitly unknown; existing answers are retained. Legacy runner tasks still require a valid exit record before automatic retirement. Connection failures, missing sessions, and uncertain creations stop creation in that group; manually verified removal can be recorded through the task manager's recovery action.
 
 `rex_tasks` separates `taskState`, `processState`, and `blockState`. An answered agent can be `completed / idle / open`; a finished shell job can be `completed / exited / open`. Task and process states come from the last activity and exit records. Block state comes from the current Rex inspection, or `unverified` if inspection fails. Confirmed closed records always report `closed`, including when a close races with inspection.
 
@@ -211,10 +211,18 @@ Existing tabs are not automatically migrated. Older BTW children need `/reload` 
 ## Delivery and recovery
 
 ```text
-Parent Pi → task record → Rex block → runner → Pi / shell
-    ↑                                             ↓
-    └── batched rex_result ← completion / return files
+Parent Pi → task record → Rex block → Pi (Agent / BTW)
+    │                         └────→ shell runner → shell
+    ↑
+    └── batched results ← completion / optional return files
+        process exits   ← Rex events / recovery inspection
 ```
+
+Agent and BTW panes start Pi directly. A short-lived `env` invocation sets the task directory and PATH, then replaces itself with Pi; there is no adapter Node supervisor in these panes. Pi owns its terminal title and native `app=pi` status. Shell keeps its runner for full logs, terminal output, backpressure, and process-group cancellation. Existing children keep their launch architecture until closed and recreated.
+
+While direct Pi panes exist, the parent maintains one Rex event subscription per Rex session. Terminal exit events persist `exit.json`; block closure updates the task record. Initial subscription, newly added tasks, and reconnection reconcile `process.last_exit`, with recovery queries serialized per session. This does not add a recurring process polling loop or block model boundaries. Reload/session shutdown releases the subscription without closing children; reconnection uses bounded backoff.
+
+If a direct Pi block disappeared while the parent was offline and Rex no longer has its exit status, recovery records `closed` with `exit.unknown=true` and an explanatory error. It retains a previously completed idle handoff; an unfinished task becomes `exited`, without inventing success or leaving it running forever. A retained block's known exit code is recovered normally. BTW exit events update history only; conclusions still require `/btw-return`.
 
 The parent collects results in a local inbox. While it is working, `turn_end` or `agent_before_settle` combines ready results into one custom message and requests a continuation. It does not wait for the entire task to become idle or queue a separate follow-up per result. While idle, it collects results for 300 ms before waking the agent once.
 
@@ -230,7 +238,7 @@ Cancellation is checked after queued layout work and before resource operations,
 
 Repeated or concurrent closes are idempotent. A task completed before closing keeps its outcome; an exit caused by closing an active task is classified as cancelled, with signal or startup errors retained. Records are not automatically deleted, and long-running jobs can keep growing their full logs.
 
-On POSIX, shell jobs have an isolated process group. The runner forwards termination signals to the group and escalates after two seconds if necessary. Processes that deliberately leave that group are outside this guarantee. SIGKILL, a Rex crash, or power loss may prevent exit records from being written, leaving the last state stale. Missing records never imply success. Ordinary reloads deduplicate delivery; crash windows do not provide transactional exactly-once guarantees.
+On POSIX, shell jobs have an isolated process group. The runner forwards termination signals to the group and escalates after two seconds if necessary. Processes that deliberately leave that group are outside this guarantee. For shell and legacy runner tasks, SIGKILL, a Rex crash, or power loss may prevent exit records from being written, leaving the last state stale. Direct Pi recovery requires Rex to be reachable; transport errors never prove that a block was removed. Missing records never imply success. Ordinary reloads deduplicate delivery; crash windows do not provide transactional exactly-once guarantees.
 
 Children use the Rex environment and the parent's `PATH`, without copying the parent's entire environment or temporary credentials. Model authentication should be available through the child's normal Pi configuration. Commands, agents, and project extensions run with the current user's permissions.
 
@@ -244,7 +252,7 @@ npm pack --dry-run
 
 The regression suite covers CLI arguments, context snapshots, interactive Pi startup, real shell success and failure, bounded result payloads, batching and deduplication, ownership, cancellation, close races, layout overflow and restoration, BTW reuse and input confirmation, task overlays, cleanup after delivery, and manual recovery. It also covers slow-terminal backpressure, log failures, process-group termination, configuration precedence, language switching, and configurable pane limits. Registration has been checked with the Pi 1.4.0 extension loader.
 
-A real Rex shell smoke test verifies the command header, title, native working/done status, stdout/stderr, and Python output arriving before process exit, with display text excluded from retained logs. Broader layout, focus, and lifecycle scenarios still need end-to-end verification. Suggested smoke tests inside Rex:
+A real Rex shell smoke test verifies the command header, title, native working/done status, stdout/stderr, and Python output arriving before process exit, with display text excluded from retained logs. An isolated real Rex test also verifies direct Agent/BTW startup in English and Chinese, native Pi identity, startup failure, block closure, and recovery of exits and removed panes after the parent reconnects. Broader layout and focus scenarios still need end-to-end verification. Suggested smoke tests inside Rex:
 
 1. `/bg printf hello`: receive `exit=0` and `hello`, then see the pane close after delivery.
 2. `/bg sleep 5; echo done; exit 7`: continue working while the job runs, then receive the nonzero exit.
