@@ -28,6 +28,11 @@ function fakeRex() {
     async control(run, action) { calls.push({ action, block: run.block }); if (action === 'close') blocks.delete(run.block); },
   };
 }
+function missingBlock(run) {
+  return Object.assign(new Error(`block ${run.block} not found`), {
+    code: 'REX_BLOCK_NOT_FOUND', block: run.block, rexSession: run.rexSession,
+  });
+}
 async function create(root, client, kind = 'agent', owner = 'owner-123456') {
   return withLayoutLock(root, async () => {
     const options = { owner, kind, name: kind, task: 'task', cwd: root, rexSession: 'rex', anchor: 'parent' };
@@ -88,6 +93,87 @@ test('unknown creation or failed inspection never silently creates more panes', 
   client.blocks.delete(first.block);
   await assert.rejects(create(root, client), /unavailable/);
   assert.equal(client.calls.length, 1);
+});
+
+test('only the exact Rex missing-block response is classified for recovery', async () => {
+  const run = { block: 'block:missing', rexSession: 'session:owner' };
+  for (const message of [
+    '/usr/local/bin/rex: Error: block target "block:missing" not found\n',
+    '/usr/local/bin/rex: Error: block target "block:other" not found\n',
+    '/usr/local/bin/rex: Error: session target "session:owner" not found\n',
+    '/usr/local/bin/rex: connection timed out',
+    '/usr/local/bin/rex: ENOENT executable not found',
+  ]) {
+    const client = new Rex('/usr/local/bin/rex', async () => { throw new Error(message); });
+    await assert.rejects(client.inspect(run), error => {
+      const missing = message.includes('block target "block:missing"');
+      assert.equal(error.code, missing ? 'REX_BLOCK_NOT_FOUND' : undefined);
+      if (missing) { assert.equal(error.block, run.block); assert.equal(error.rexSession, run.rexSession); }
+      return true;
+    });
+  }
+});
+
+for (const kind of ['agent', 'shell', 'btw']) test(`${kind}: absent exited panes retire automatically and no longer block creation`, async t => {
+  const root = await temp(t), client = fakeRex();
+  const run = await create(root, client, kind);
+  const result = { status: 'completed', text: 'retained result' }, exit = { code: 0 };
+  await atomicJson(join(run.dir, 'result.json'), result);
+  await atomicJson(join(run.dir, 'exit.json'), exit);
+  client.blocks.delete(run.block);
+  const inspect = client.inspect;
+  client.inspect = async r => { if (!client.blocks.has(r.block)) throw missingBlock(r); return inspect(r); };
+  if (kind === 'btw') {
+    assert.equal(await withLayoutLock(root, () => existingBtw(root, client, { rexSession: 'rex', task: 'new question' })), undefined);
+    assert.equal((await readdir(run.dir)).some(f => f.startsWith('input-')), false);
+  }
+  const replacement = await create(root, client, kind);
+  const retired = await readJson(join(run.dir, 'run.json'));
+  assert.equal(retired.closed, true); assert.equal(retired.status, 'completed');
+  assert.equal(retired.completedBeforeClose, true); assert.ok(retired.resolvedAt);
+  assert.deepEqual(await readJson(join(run.dir, 'result.json')), result);
+  assert.deepEqual(await readJson(join(run.dir, 'exit.json')), exit);
+  assert.equal(client.calls.some(c => c.action === 'close'), false);
+  if (kind === 'btw') assert.equal(replacement.layout.anchor, 'parent');
+  else { assert.equal(replacement.layout.mode, 'window'); assert.equal(replacement.layout.page, 1); }
+});
+
+for (const kind of ['agent', 'btw']) test(`${kind}: ambiguous failures and missing exit evidence remain blocking`, async t => {
+  const root = await temp(t), client = fakeRex(), run = await create(root, client, kind);
+  const launch = () => kind === 'btw'
+    ? withLayoutLock(root, () => existingBtw(root, client, { rexSession: 'rex', task: 'next' })) : create(root, client);
+  const original = await readJson(join(run.dir, 'run.json'));
+  client.inspect = async r => { throw missingBlock(r); };
+  await assert.rejects(launch(), /not found/); // No exit.json, even if activity says idle.
+  await atomicJson(join(run.dir, 'activity.json'), { process: 'idle' });
+  await atomicJson(join(run.dir, 'exit.json'), {});
+  await assert.rejects(launch(), /not found/);
+  await atomicJson(join(run.dir, 'exit.json'), { code: 0 });
+  client.inspect = async () => { throw new Error('connection timed out'); };
+  await assert.rejects(launch(), /timed out/);
+  client.inspect = async r => { throw { ...missingBlock(r), rexSession: 'another session' }; };
+  await assert.rejects(launch());
+  assert.deepEqual(await readJson(join(run.dir, 'run.json')), original);
+  assert.equal(client.calls.length, 1);
+  assert.equal((await readdir(run.dir)).some(f => f.startsWith('input-')), false);
+});
+
+test('retiring stale agent groups preserves failed/exited outcomes and concurrent placement', async t => {
+  const root = await temp(t), client = fakeRex(), runs = [];
+  for (let i = 0; i < 3; i++) runs.push(await create(root, client));
+  for (let i = 0; i < runs.length; i++) {
+    await atomicJson(join(runs[i].dir, 'exit.json'), { code: [0, 7, null][i] });
+    client.blocks.delete(runs[i].block);
+  }
+  const inspect = client.inspect;
+  client.inspect = async r => { if (!client.blocks.has(r.block)) throw missingBlock(r); return inspect(r); };
+  const [a, b] = await Promise.all([create(root, client), create(root, client)]);
+  assert.equal(a.layout.page, 1); assert.equal(a.layout.mode, 'window');
+  assert.equal(b.layout.page, 1); assert.equal(b.layout.anchor, a.block);
+  for (let i = 0; i < runs.length; i++) {
+    const r = await readJson(join(runs[i].dir, 'run.json'));
+    assert.equal(r.closed, true); assert.equal(r.status, i === 0 ? 'exited' : 'failed');
+  }
 });
 
 test('BTW reuses the same session, queues literal questions, focuses on bare invocation and reopens after exit', async t => {

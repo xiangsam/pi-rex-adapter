@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { atomicJson, listRuns, readJson } from './core.mjs';
+import { atomicJson, listRuns, readJson, runStatus } from './core.mjs';
 import { DEFAULT_CONFIG } from './config.mjs';
 
 // Survives extension reload in the same Pi process. Only layout mutations for
@@ -13,6 +13,26 @@ export async function withLayoutLock(root, work) {
   try { return await next; } finally { if (locks.get(root) === next) locks.delete(root); }
 }
 
+// Called under the parent's layout lock, only while choosing/reusing a pane.
+// Keep ambiguous failures blocking; an exited process plus an explicitly absent
+// block is enough to retire the stale record without sending another close.
+async function inspectOrRetire(client, run, signal) {
+  try { return await client.inspect(run, signal); }
+  catch (error) {
+    signal?.throwIfAborted();
+    if (error.code !== 'REX_BLOCK_NOT_FOUND' || error.block !== run.block || error.rexSession !== run.rexSession) throw error;
+    const [latest, exit, result] = await Promise.all(['run', 'exit', 'result'].map(name => readJson(join(run.dir, `${name}.json`))));
+    signal?.throwIfAborted();
+    if (!latest || latest.id !== run.id || latest.block !== run.block || latest.rexSession !== run.rexSession ||
+        !exit || !(exit.code === null || Number.isInteger(exit.code))) throw error;
+    Object.assign(run, latest, { closed: true, completedBeforeClose: true,
+      resolvedAt: new Date().toISOString(), resolution: 'Rex confirmed block absent; process exit record exists.' });
+    run.status = runStatus(run, exit, result);
+    await atomicJson(join(run.dir, 'run.json'), run);
+    return undefined;
+  }
+}
+
 export async function existingBtw(root, client, options) {
   const { signal } = options;
   signal?.throwIfAborted();
@@ -20,8 +40,8 @@ export async function existingBtw(root, client, options) {
   for (const run of candidates.sort((a, b) => b.createdAt.localeCompare(a.createdAt))) {
     const exit = await readJson(join(run.dir, 'exit.json'));
     if (!run.block) throw new Error(`BTW launch ${run.id} is unresolved; inspect Rex before retrying.`);
-    // Never interpret a connection/inspection failure as permission to duplicate.
-    const actual = await client.inspect(run, signal);
+    const actual = await inspectOrRetire(client, run, signal);
+    if (!actual) continue;
     signal?.throwIfAborted();
     run.window = actual.window;
     if (exit && options.task) {
@@ -58,10 +78,11 @@ export async function choosePlacement(root, client, run, signal, panesPerTab = D
   let maxPage = 0;
   for (const member of members) {
     if (member.closed) continue;
-    maxPage = Math.max(maxPage, member.layout.page || 1);
     if (!member.block) throw new Error(`Layout acquisition ${member.id} is unresolved; inspect Rex before launching more ${role}.`);
-    const actual = await client.inspect(member, signal);
+    const actual = await inspectOrRetire(client, member, signal);
+    if (!actual) continue;
     signal?.throwIfAborted();
+    maxPage = Math.max(maxPage, member.layout.page || 1);
     occupancy.set(actual.window, (occupancy.get(actual.window) || 0) + 1);
     // The user owns subsequent layout changes. Never move a block back or add
     // companions beside it after it has left its original managed window.

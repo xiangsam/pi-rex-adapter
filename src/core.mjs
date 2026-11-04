@@ -67,7 +67,17 @@ export class Rex {
     return result.block_ids[0];
   }
   async inspect(manifest, signal) {
-    const result = await this.json(['block', 'inspect', manifest.block, '-s', manifest.rexSession, '--json'], signal);
+    let result;
+    try { result = await this.json(['block', 'inspect', manifest.block, '-s', manifest.rexSession, '--json'], signal); }
+    catch (error) {
+      // Classify only Rex's exact missing-target response for the requested
+      // block. Transport errors and a missing session are not proof of removal.
+      if (error.message.trim() === `${this.binary}: Error: block target "${manifest.block}" not found`) {
+        error.code = 'REX_BLOCK_NOT_FOUND';
+        error.block = manifest.block; error.rexSession = manifest.rexSession;
+      }
+      throw error;
+    }
     if (typeof result.block?.window_id !== 'string') throw new Error('Rex inspection did not identify the block window. No layout changes made.');
     return { window: result.block.window_id };
   }
