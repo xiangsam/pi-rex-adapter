@@ -1,4 +1,4 @@
-# pi-rex-adapter
+<h1><img src="https://raw.githubusercontent.com/xiangsam/pi-rex-adapter/main/assets/pi-rex-adapter.png" width="48" height="48" alt="Pi + Rex logo" align="absmiddle"> pi-rex-adapter</h1>
 
 **English** | [简体中文](https://github.com/xiangsam/pi-rex-adapter/blob/main/README.zh-CN.md)
 
