@@ -36,7 +36,7 @@ Or try it for one session:
 pi -e git:github.com/xiangsam/pi-rex-adapter
 ```
 
-The parent Pi must run inside Rex. The adapter uses `REX_SESSION` and `REX_BLOCK` to target the parent block, regardless of which pane currently has focus. If `rex` is not on `PATH`, it checks the standard macOS Rex and Rex Beta application locations; `PI_REX_BIN` can specify the executable. Child sessions use the current Pi entry point unless `PI_REX_PI_BIN` is set.
+The parent Pi must run inside Rex. The adapter uses `REX_SESSION` and `REX_BLOCK` to target the parent block, regardless of which pane currently has focus. Each command resolves the executable again: `PI_REX_BIN` when that path is executable, otherwise `PATH`, then the standard macOS Rex and Rex Beta application locations. Child sessions use the current Pi entry point unless `PI_REX_PI_BIN` is set.
 
 Parent and child processes must share the same machine and filesystem. Remote Rex hosts are not supported.
 

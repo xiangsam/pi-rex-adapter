@@ -5,13 +5,43 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { Rex, prepareRun, readJson, atomicJson, piArgs, contextSnapshot, tailFile, runStatus } from '../src/core.mjs';
+import { Rex, rexExecutable, prepareRun, readJson, atomicJson, piArgs, contextSnapshot, tailFile, runStatus } from '../src/core.mjs';
 import adapter from '../src/index.mjs';
 
 async function temporary(t) {
   const root = await mkdtemp(join(tmpdir(), 'pi-rex-test-'));
   t.after(() => rm(root, { recursive: true, force: true })); return root;
 }
+test('rex executable is resolved again after its path disappears', async t => {
+  const root = await temporary(t);
+  const first = join(root, 'a'), second = join(root, 'b'), pinned = join(root, 'pinned');
+  await mkdir(first); await mkdir(second);
+  const script = '#!/bin/sh\n';
+  await writeFile(join(first, 'rex'), script, { mode: 0o700 });
+  await writeFile(join(second, 'rex'), script, { mode: 0o700 });
+  await writeFile(pinned, script, { mode: 0o700 });
+  const env = { PATH: `${first}:${second}` };
+  assert.equal(await rexExecutable(env), join(first, 'rex'));
+  await rm(join(first, 'rex'));
+  assert.equal(await rexExecutable(env), join(second, 'rex'));
+  assert.equal(await rexExecutable({ ...env, PI_REX_BIN: pinned }), pinned);
+  await rm(pinned);
+  assert.equal(await rexExecutable({ ...env, PI_REX_BIN: pinned }), join(second, 'rex'));
+  const seen = [];
+  let path = '/old/rex';
+  const moving = new Rex(async () => path, async (file, args) => {
+    seen.push(file);
+    if (args[0] === 'focus') return '';
+    if (String(file).endsWith('/missing')) throw new Error(`${file}: Error: block target "b" not found`);
+    return '{"block_ids":["b"]}';
+  });
+  await moving.open({ kind: 'agent', rexSession: 's', cwd: '/tmp', name: 'n', dir: '/tmp/d' }, 'runner');
+  path = '/new/rex';
+  await moving.control({ block: 'b', rexSession: 's' }, 'focus');
+  path = '/missing';
+  await assert.rejects(moving.inspect({ block: 'b', rexSession: 's' }), error => error.code === 'REX_BLOCK_NOT_FOUND');
+  assert.deepEqual(seen, ['/old/rex', '/new/rex', '/missing']);
+});
 test('BTW placement anchors on the parent, preserves focus, and keeps arguments literal', async () => {
   let args;
   const rex = new Rex('rex', async (_file, argv) => { args = argv; return '{"block_ids":["new","parent"]}'; });

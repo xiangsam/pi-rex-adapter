@@ -34,8 +34,8 @@ export function exec(file, args, signal) {
   });
 }
 export async function rexExecutable(env = process.env) {
-  if (env.PI_REX_BIN) return env.PI_REX_BIN;
   for (const path of [
+    ...(env.PI_REX_BIN ? [env.PI_REX_BIN] : []),
     ...((env.PATH || '').split(':').map(p => join(p, 'rex'))),
     '/Applications/Rex.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex',
     '/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex',
@@ -45,8 +45,21 @@ export async function rexExecutable(env = process.env) {
   throw new Error('Rex CLI not found. Set PI_REX_BIN to its executable path.');
 }
 export class Rex {
-  constructor(binary, run = exec) { this.binary = binary; this.run = run; }
-  async json(args, signal) { signal?.throwIfAborted(); return JSON.parse(await this.run(this.binary, args, signal)); }
+  constructor(binary, run = exec) {
+    this.binary = typeof binary === 'function' ? undefined : binary;
+    this.locate = typeof binary === 'function' ? binary : undefined;
+    this.run = run;
+  }
+  // A moved CLI is picked up on the next command. Event streams re-resolve when they reconnect.
+  async executable() {
+    if (this.locate) this.binary = await this.locate();
+    return this.binary;
+  }
+  async json(args, signal) {
+    signal?.throwIfAborted();
+    const binary = await this.executable();
+    return JSON.parse(await this.run(binary, args, signal));
+  }
   async open(manifest, runner, signal) {
     signal?.throwIfAborted();
     const layout = manifest.layout;
@@ -74,11 +87,13 @@ export class Rex {
     return { window: result.block.window_id };
   }
   async blockJson(manifest, args, signal) {
-    try { return await this.json(args, signal); }
+    signal?.throwIfAborted();
+    const binary = await this.executable();
+    try { return JSON.parse(await this.run(binary, args, signal)); }
     catch (error) {
       // Classify only Rex's exact missing-target response for the requested
       // block. Transport errors and a missing session are not proof of removal.
-      if (error.message.trim() === `${this.binary}: Error: block target "${manifest.block}" not found`) {
+      if (error.message.trim() === `${binary}: Error: block target "${manifest.block}" not found`) {
         error.code = 'REX_BLOCK_NOT_FOUND';
         error.block = manifest.block; error.rexSession = manifest.rexSession;
       }
@@ -89,6 +104,7 @@ export class Rex {
     return this.blockJson(manifest, ['block', 'call', '-s', manifest.rexSession, '-b', manifest.block, 'process'], signal);
   }
   events(session, { onEvent, onReady, onDisconnect }) {
+    if (!this.binary) throw new Error('Rex CLI not found. Set PI_REX_BIN to its executable path.');
     const child = spawn(this.binary, ['events', '-s', session, '--json'], { stdio: ['ignore', 'pipe', 'pipe'] });
     const lines = createInterface({ input: child.stdout });
     let stopped = false, ready = false, errorText = '';
@@ -112,10 +128,11 @@ export class Rex {
   async control(manifest, action, signal) {
     signal?.throwIfAborted();
     if (!manifest.block) throw new Error('Block identity unknown; inspect Rex before retrying.');
+    const binary = await this.executable();
     const tail = ['-s', manifest.rexSession];
-    if (action === 'close') return this.run(this.binary, ['block', 'close', ...tail, manifest.block], signal);
-    if (action === 'focus') return this.run(this.binary, ['focus', ...tail, manifest.block], signal);
-    if (action === 'interrupt') return this.run(this.binary, ['send-key', ...tail, '-b', manifest.block, 'escape'], signal);
+    if (action === 'close') return this.run(binary, ['block', 'close', ...tail, manifest.block], signal);
+    if (action === 'focus') return this.run(binary, ['focus', ...tail, manifest.block], signal);
+    if (action === 'interrupt') return this.run(binary, ['send-key', ...tail, '-b', manifest.block, 'escape'], signal);
     throw new Error(`Unknown action: ${action}`);
   }
 }

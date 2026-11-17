@@ -39,9 +39,9 @@ export default function adapter(pi, dependencies = {}) {
   const active = new Set();
   const toolDefinitions = new Map();
   let controlsDirect = false;
-  let rexPromise;
+  let rexClient;
   let lifecycle, lifecycleStarting;
-  const rex = () => dependencies.rex ? Promise.resolve(dependencies.rex) : (rexPromise ??= rexExecutable().then(binary => new Rex(binary)));
+  const rex = () => dependencies.rex ? Promise.resolve(dependencies.rex) : Promise.resolve(rexClient ??= new Rex(() => rexExecutable()));
   const seen = ctx => new Set(ctx.sessionManager.getEntries()
     .filter(e => e.type === 'custom_message' && e.customType === 'rex_result')
     .flatMap(e => e.details?.receipts || [e.details?.receipt]));

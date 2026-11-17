@@ -88,26 +88,37 @@ export function observeLifecycles({ client, root, signal, onChange, onError = ()
   }
   function connect(state) {
     if (!valid() || sessions.get(state.session) !== state) return;
-    try {
-      state.stop = client.events(state.session, {
-        onReady() {
-          if (!valid() || sessions.get(state.session) !== state) return;
-          state.ready = true;
-          for (const run of runs.values()) if (run.rexSession === state.session) queueProbe(run, state);
-        },
-        onEvent(event) {
-          if (!valid() || sessions.get(state.session) !== state) return;
-          const payload = event?.payload;
-          const closed = event?.type === 'block_closed';
-          const exit = event?.type === 'block_event' && payload?.creator_name === 'com.superlogical.terminal' &&
-            payload.name === 'child_exited' ? rexExit(payload.payload) : undefined;
-          if (!closed && !exit) return;
-          const run = [...runs.values()].find(run => run.rexSession === state.session && run.block === payload?.block_id);
-          if (run) background(() => save(run, { closed, exit }));
-        },
-        onDisconnect: error => reconnect(state, error),
+    const open = () => {
+      if (!valid() || sessions.get(state.session) !== state) return;
+      try {
+        state.stop = client.events(state.session, {
+          onReady() {
+            if (!valid() || sessions.get(state.session) !== state) return;
+            state.ready = true;
+            for (const run of runs.values()) if (run.rexSession === state.session) queueProbe(run, state);
+          },
+          onEvent(event) {
+            if (!valid() || sessions.get(state.session) !== state) return;
+            const payload = event?.payload;
+            const closed = event?.type === 'block_closed';
+            const exit = event?.type === 'block_event' && payload?.creator_name === 'com.superlogical.terminal' &&
+              payload.name === 'child_exited' ? rexExit(payload.payload) : undefined;
+            if (!closed && !exit) return;
+            const run = [...runs.values()].find(run => run.rexSession === state.session && run.block === payload?.block_id);
+            if (run) background(() => save(run, { closed, exit }));
+          },
+          onDisconnect: error => reconnect(state, error),
+        });
+      } catch (error) { reconnect(state, error); }
+    };
+    const pending = client.executable?.();
+    if (pending && typeof pending.then === 'function') {
+      pending.then(() => open(), error => {
+        if (valid() && sessions.get(state.session) === state) reconnect(state, error);
       });
-    } catch (error) { reconnect(state, error); }
+      return;
+    }
+    open();
   }
   function update(items) {
     if (!valid()) return;

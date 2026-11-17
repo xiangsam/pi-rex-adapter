@@ -32,7 +32,7 @@ pi -e git:github.com/xiangsam/pi-rex-adapter
 
 也可以从 GitHub 安装：`pi install git:github.com/xiangsam/pi-rex-adapter`。
 
-父进程必须在 Rex 中运行，依赖 `REX_SESSION` 和 `REX_BLOCK` 定位，始终使用父 block 而不是界面当前焦点。CLI 不在 PATH 时会探测 macOS 的 Rex/Rex Beta 应用；也可设置 `PI_REX_BIN`。子进程默认使用当前 Pi 的入口，`PI_REX_PI_BIN` 可覆盖。运行环境为同一台机器、同一文件系统；不支持远程 Rex host。
+父进程必须在 Rex 中运行，依赖 `REX_SESSION` 和 `REX_BLOCK` 定位，始终使用父 block 而不是界面当前焦点。每次调用都会重新查找可执行文件：`PI_REX_BIN` 优先，该路径不可执行时再查 `PATH`，最后探测 macOS 的 Rex/Rex Beta 应用。子进程默认使用当前 Pi 的入口，`PI_REX_PI_BIN` 可覆盖。运行环境为同一台机器、同一文件系统；不支持远程 Rex host。
 
 ## 配置
 
